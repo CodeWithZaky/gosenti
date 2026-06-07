@@ -1,0 +1,25 @@
+# --- NODE.JS (Next.js) ---
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+
+# --- PYTHON (FastAPI) ---
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+**/env/
+
+# --- CONFIG & SYSTEM ---
+**/.env
+**/.env.local
+.DS_Store
+Thumbs.db
+
+# gosenti/.gitignore
+**/.env
+**/.env.local
+.DS_Store
+Thumbs.db
+node_modules/
