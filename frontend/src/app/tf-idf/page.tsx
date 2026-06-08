@@ -236,7 +236,7 @@ export default function TfIdfPage() {
                   {unigramCount} uni + {bigramCount} bi
                 </p>
               </div>
-              <div className="flex-shrink-0 bg-primary/10 ml-2 p-2 rounded-lg">
+              <div className="bg-primary/10 ml-2 p-2 rounded-lg shrink-0">
                 <Hash className="w-4 h-4 text-primary" />
               </div>
             </div>
@@ -256,7 +256,7 @@ export default function TfIdfPage() {
                   rata-rata TF-IDF
                 </p>
               </div>
-              <div className="flex-shrink-0 bg-emerald-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-emerald-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <TrendingUp className="w-4 h-4 text-emerald-600" />
               </div>
             </div>
@@ -274,7 +274,7 @@ export default function TfIdfPage() {
                 </p>
                 <p className="text-muted-foreground text-xs">skor tertinggi</p>
               </div>
-              <div className="flex-shrink-0 bg-violet-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-violet-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <Zap className="w-4 h-4 text-violet-600" />
               </div>
             </div>
@@ -292,7 +292,7 @@ export default function TfIdfPage() {
                 </p>
                 <p className="text-muted-foreground text-xs">model</p>
               </div>
-              <div className="flex-shrink-0 bg-amber-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-amber-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <CheckCircle2 className="w-4 h-4 text-amber-600" />
               </div>
             </div>
