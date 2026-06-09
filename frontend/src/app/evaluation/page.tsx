@@ -29,7 +29,6 @@ import {
   Cpu,
   Database,
   FileText,
-  Info,
   Layers,
   RefreshCw,
   TrendingUp,
@@ -376,7 +375,7 @@ export default function EvaluationPage() {
       </div>
 
       {/* Info */}
-      <Card className="bg-muted/30 border">
+      {/* <Card className="bg-muted/30 border">
         <CardContent className="flex items-start gap-3 p-4">
           <Info className="mt-0.5 w-5 h-5 text-primary shrink-0" />
           <div className="text-muted-foreground text-sm">
@@ -394,7 +393,7 @@ export default function EvaluationPage() {
             </p>
           </div>
         </CardContent>
-      </Card>
+      </Card> */}
 
       {/* Charts */}
       <Tabs defaultValue="comparison" className="space-y-4">
