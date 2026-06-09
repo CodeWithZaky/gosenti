@@ -7,10 +7,10 @@ import {
   Brain,
   ChevronRight,
   FileText,
+  Layers,
   LayoutDashboard,
   Puzzle,
-  Scale,
-  Settings,
+  Tag,
   Trash2,
   TrendingUp,
 } from "lucide-react";
@@ -22,18 +22,19 @@ const navigationItems = [
 ];
 
 const dataMasterItems = [
-  { title: "Data Berita (Raw)", href: "/news_data", icon: FileText },
-  { title: "Hasil Deduplikasi", href: "/deduplication", icon: Trash2 },
+  { title: "News Data", href: "/news-data", icon: FileText },
+  { title: "Deduplication Data", href: "/deduplication", icon: Trash2 },
 ];
 
 const pipelineItems = [
-  { title: "Preprocessing", href: "/preprocess", icon: Settings },
-  { title: "SentiStrength", href: "/sentistrength", icon: Scale },
-  { title: "Inset Feature", href: "/inset_feature", icon: Puzzle },
-  { title: "TF-IDF", href: "/tf-idf", icon: BarChart3 },
-  { title: "CNB Modeling", href: "/modeling", icon: Brain },
-  { title: "Evaluasi", href: "/evaluation", icon: TrendingUp },
+  { title: "Preprocessing", href: "/preprocessing", icon: Layers },
+  { title: "Data Labeling", href: "/data-labeling", icon: Tag },
+  { title: "Inset Feature", href: "/inset-feature", icon: Puzzle },
+  { title: "TF-IDF Feature", href: "/tf-idf-feature", icon: BarChart3 },
+  { title: "Model Training", href: "/model-training", icon: Brain },
+  { title: "Evaluation", href: "/evaluation", icon: TrendingUp },
 ];
+
 const Sidebar = () => {
   const pathname = usePathname();
 
@@ -41,10 +42,11 @@ const Sidebar = () => {
     if (href === "/") return pathname === "/";
     return pathname.startsWith(href);
   };
+
   return (
     <aside className="p-2 h-full shrink-0">
       <Card className="flex flex-col shadow-none px-6 py-4 border h-full overflow-hidden">
-        {/* Header - padding lebih kecil */}
+        {/* Header */}
         <div className="pb-2 border-b">
           <div className="flex items-center gap-2.5">
             <div className="bg-primary p-1.5 rounded-md">
@@ -95,7 +97,6 @@ const Sidebar = () => {
           {/* Data Master */}
           <div>
             <div className="flex items-center gap-1.5 mb-1.5 px-2.5">
-              {/* <Database className="w-3 h-3 text-muted-foreground" /> */}
               <h2 className="font-semibold text-[10px] text-muted-foreground uppercase tracking-wider">
                 Data Master
               </h2>
@@ -132,7 +133,6 @@ const Sidebar = () => {
           {/* Pipeline */}
           <div>
             <div className="flex items-center gap-1.5 mb-1.5 px-2.5">
-              {/* <Workflow className="w-3 h-3 text-muted-foreground" /> */}
               <h2 className="font-semibold text-[10px] text-muted-foreground uppercase tracking-wider">
                 Pipeline
               </h2>

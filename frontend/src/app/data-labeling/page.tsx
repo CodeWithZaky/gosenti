@@ -227,7 +227,7 @@ export default function SentiStrengthPage() {
                 </p>
                 <p className="text-muted-foreground text-xs truncate">data</p>
               </div>
-              <div className="flex-shrink-0 bg-sky-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-sky-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <FileText className="w-4 h-4 text-sky-600" />
               </div>
             </div>
@@ -247,7 +247,7 @@ export default function SentiStrengthPage() {
                 </p>
                 <p className="text-muted-foreground text-xs">{positivePct}%</p>
               </div>
-              <div className="flex-shrink-0 bg-emerald-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-emerald-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <ThumbsUp className="w-4 h-4 text-emerald-600" />
               </div>
             </div>
@@ -267,7 +267,7 @@ export default function SentiStrengthPage() {
                 </p>
                 <p className="text-muted-foreground text-xs">{neutralPct}%</p>
               </div>
-              <div className="flex-shrink-0 bg-muted ml-2 p-2 rounded-lg">
+              <div className="bg-muted ml-2 p-2 rounded-lg shrink-0">
                 <Minus className="w-4 h-4 text-muted-foreground" />
               </div>
             </div>
@@ -287,7 +287,7 @@ export default function SentiStrengthPage() {
                 </p>
                 <p className="text-muted-foreground text-xs">{negativePct}%</p>
               </div>
-              <div className="flex-shrink-0 bg-red-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-red-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <ThumbsDown className="w-4 h-4 text-red-600" />
               </div>
             </div>
@@ -313,7 +313,7 @@ export default function SentiStrengthPage() {
                 </p>
                 <p className="text-muted-foreground text-xs">rata-rata</p>
               </div>
-              <div className="flex-shrink-0 bg-violet-500/10 ml-2 p-2 rounded-lg">
+              <div className="bg-violet-500/10 ml-2 p-2 rounded-lg shrink-0">
                 <TrendingUp className="w-4 h-4 text-violet-600" />
               </div>
             </div>
