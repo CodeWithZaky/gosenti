@@ -28,10 +28,10 @@ def run_tfidf():
     # TF-IDF Vectorizer
     vectorizer = TfidfVectorizer(
         ngram_range=(1, 2),      # unigram + bigram
-        max_features=5000,       # maksimal 5000 fitur
+        max_features=None,       # maksimal 5000 fitur
         min_df=2,                # minimal muncul di 2 dokumen
         max_df=0.8,              # maksimal 80% dokumen
-        stop_words=None
+        sublinear_tf=True,
     )
     
     print("Melakukan fit_transform...")
