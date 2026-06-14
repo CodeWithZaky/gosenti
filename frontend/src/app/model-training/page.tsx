@@ -3,28 +3,21 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   Activity,
+  ArrowRight,
   Brain,
   Calendar,
-  FileText,
-  History,
   Layers,
   Loader2,
   Play,
+  Search,
   Target,
   TrendingUp,
-  Zap,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -32,6 +25,8 @@ export default function ModelingPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [experiments, setExperiments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasGridSearch, setHasGridSearch] = useState(false);
+  const [alphaInfo, setAlphaInfo] = useState({ baseline: 1.0, proposed: 1.0 });
 
   const fetchHistory = async () => {
     try {
@@ -45,8 +40,32 @@ export default function ModelingPage() {
     }
   };
 
+  const fetchAlphaInfo = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/modeling/grid-search");
+      const result = await res.json();
+      if (result.status === "success") {
+        setHasGridSearch(true);
+        // Coba ambil alpha dari best_params
+        const paramsRes = await fetch(
+          "http://localhost:8000/api/evaluation/confusion-matrix",
+        );
+        const paramsData = await paramsRes.json();
+        if (paramsData.status === "success" && paramsData.data.config) {
+          setAlphaInfo({
+            baseline: paramsData.data.config.alpha_baseline || 1.0,
+            proposed: paramsData.data.config.alpha_proposed || 1.0,
+          });
+        }
+      }
+    } catch (err) {
+      setHasGridSearch(false);
+    }
+  };
+
   useEffect(() => {
     fetchHistory();
+    fetchAlphaInfo();
   }, []);
 
   const handleRunModeling = async () => {
@@ -63,16 +82,20 @@ export default function ModelingPage() {
           id: toastId,
           description: "Model CNB telah dilatih dengan 10-Fold CV",
         });
-        fetchHistory();
+        setIsProcessing(false);
+        setTimeout(() => {
+          fetchHistory();
+          fetchAlphaInfo();
+        }, 1000);
       } else {
         toast.error("Training gagal!", {
           id: toastId,
           description: result.message || "Terjadi kesalahan",
         });
+        setIsProcessing(false);
       }
     } catch (err) {
       toast.error("Gagal terhubung ke server", { id: toastId });
-    } finally {
       setIsProcessing(false);
     }
   };
@@ -83,18 +106,15 @@ export default function ModelingPage() {
 
   return (
     <div className="space-y-6">
+      {/* HEADER */}
       <div className="flex sm:flex-row flex-col sm:justify-between sm:items-start gap-4">
         <div>
           <h1 className="font-bold text-foreground text-3xl">Modeling</h1>
           <p className="mt-1 text-muted-foreground text-sm">
-            Training Complement Naive Bayes dengan TF-IDF dan InSet Lexicon
+            Training Complement Naive Bayes dengan Grid Search + 10-Fold CV
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Badge variant="secondary" className="px-3 py-1.5 text-sm">
-            <Activity className="mr-1.5 w-3.5 h-3.5" />
-            10-Fold CV
-          </Badge>
           <Button
             onClick={handleRunModeling}
             disabled={isProcessing}
@@ -115,239 +135,208 @@ export default function ModelingPage() {
         </div>
       </div>
 
-      {latestExp && (
+      {latestExp ? (
         <div className="space-y-6">
-          {/* Hasil Terbaru */}
-          <div className="flex items-center gap-3">
-            <h2 className="font-bold text-foreground text-2xl">
-              Hasil Training Terakhir
-            </h2>
-            <Badge variant="secondary" className="flex items-center gap-1">
-              <Calendar className="w-3 h-3" />
-              {new Date(latestExp.created_at).toLocaleString("id-ID")}
-            </Badge>
+          {/* SUB HEADER */}
+          <div className="flex sm:flex-row flex-col sm:justify-between sm:items-center gap-3">
+            <div className="flex items-center gap-3">
+              <h2 className="font-bold text-foreground text-2xl">
+                Hasil Training Terakhir
+              </h2>
+              <Badge variant="secondary" className="flex items-center gap-1">
+                <Calendar className="w-3 h-3" />
+                {new Date(latestExp.created_at).toLocaleString("id-ID")}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              {hasGridSearch && (
+                <Link href="/model-training/search-alpha">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-amber-300 dark:border-amber-700"
+                  >
+                    <Search className="mr-2 w-4 h-4" />
+                    Detail Alpha
+                  </Button>
+                </Link>
+              )}
+              <Link href="/evaluation">
+                <Button variant="outline" size="sm">
+                  Lihat Evaluasi →
+                </Button>
+              </Link>
+            </div>
           </div>
 
-          {/* Stats Utama */}
-          {/* Stats Utama - 4 Card */}
-          <div className="gap-3 grid grid-cols-2 lg:grid-cols-4">
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-4">
-                <div className="flex justify-between items-start">
-                  <div className="space-y-0.5 min-w-0">
-                    <p className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-                      Avg Accuracy Fold
-                    </p>
-                    <p className="font-bold tabular-nums text-violet-600 text-xl">
-                      {(latestExp.accuracy_mean * 100).toFixed(2)}%
-                    </p>
-                    <p className="text-muted-foreground text-xs">
-                      ±{(latestExp.accuracy_std * 100).toFixed(2)}%
-                    </p>
+          {/* BASELINE vs PROPOSED CARDS */}
+          <div>
+            <h3 className="mb-4 font-semibold text-foreground text-lg">
+              Perbandingan Baseline vs Proposed
+            </h3>
+            <div className="gap-6 grid grid-cols-1 lg:grid-cols-2">
+              {/* BASELINE CARD */}
+              <Card className="bg-gray-50 dark:bg-gray-950/30 border-2 border-gray-300 dark:border-gray-600">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-center">
+                    <Badge variant="secondary" className="px-3 py-1 text-sm">
+                      BASELINE
+                    </Badge>
+                    <span className="text-muted-foreground text-xs">
+                      TF-IDF Only
+                    </span>
                   </div>
-                  <div className="flex bg-violet-500/10 ml-2 p-2 rounded-lg shrink-0">
-                    <TrendingUp className="w-4 h-4 text-violet-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-4">
-                <div className="flex justify-between items-start">
-                  <div className="space-y-0.5 min-w-0">
-                    <p className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-                      Avg F1-Score Fold
-                    </p>
-                    <p className="font-bold tabular-nums text-sky-600 text-xl">
-                      {(latestExp.f1_score_mean * 100).toFixed(2)}%
-                    </p>
-                    <p className="text-muted-foreground text-xs">
-                      ±{(latestExp.f1_score_std * 100).toFixed(2)}%
-                    </p>
-                  </div>
-                  <div className="flex bg-sky-500/10 ml-2 p-2 rounded-lg shrink-0">
-                    <Zap className="w-4 h-4 text-sky-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-4">
-                <div className="flex justify-between items-start">
-                  <div className="space-y-0.5 min-w-0">
-                    <p className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-                      Samples
-                    </p>
-                    <p className="font-bold tabular-nums text-foreground text-xl">
-                      {latestExp.total_samples}
-                    </p>
-                    <p className="text-muted-foreground text-xs">total data</p>
-                  </div>
-                  <div className="flex bg-emerald-500/10 ml-2 p-2 rounded-lg shrink-0">
-                    <Target className="w-4 h-4 text-emerald-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-4">
-                <div className="flex justify-between items-start">
-                  <div className="space-y-0.5 min-w-0">
-                    <p className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-                      Features
-                    </p>
-                    <p className="font-bold tabular-nums text-foreground text-xl">
-                      {latestExp.feature_count}
-                    </p>
-                    <p className="text-muted-foreground text-xs">dimensi</p>
-                  </div>
-                  <div className="flex bg-amber-500/10 ml-2 p-2 rounded-lg shrink-0">
-                    <Layers className="w-4 h-4 text-amber-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Classification Report (Kiri) + CV Folds (Kanan) */}
-          <div className="gap-6 grid grid-cols-1 lg:grid-cols-2">
-            {/* Classification Report */}
-            <Card className="border">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-violet-600" />
-                  <CardTitle className="text-lg">
-                    Classification Report
+                  <CardTitle className="mt-2 text-lg">
+                    Tanpa InSet Lexicon
                   </CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {latestExp.classification_report ? (
-                  <ClassificationReportTable
-                    report={latestExp.classification_report}
-                  />
-                ) : (
-                  <p className="py-8 text-muted-foreground text-center">
-                    Tidak ada data
+                  <p className="text-muted-foreground text-xs">
+                    α = {alphaInfo.baseline.toFixed(2)} • CNB
                   </p>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* CV Folds */}
-            <Card className="border">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-sky-600" />
-                  <CardTitle className="text-lg">Rincian per Fold</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="font-bold">Fold</TableHead>
-                      <TableHead className="font-bold text-right">
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="gap-3 grid grid-cols-2">
+                    <div className="bg-white dark:bg-gray-900 p-3 border rounded-lg text-center">
+                      <p className="mb-1 text-muted-foreground text-xs">
                         Accuracy
-                      </TableHead>
-                      <TableHead className="font-bold text-right">
+                      </p>
+                      <p className="font-bold text-gray-600 dark:text-gray-400 text-2xl">
+                        {((latestExp.baseline_accuracy || 0) * 100).toFixed(2)}%
+                      </p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-900 p-3 border rounded-lg text-center">
+                      <p className="mb-1 text-muted-foreground text-xs">
                         F1-Score
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {latestExp.folds?.map((fold: any) => (
-                      <TableRow key={fold.id} className="hover:bg-muted/30">
-                        <TableCell className="font-medium">
-                          Fold {fold.fold_number}
-                        </TableCell>
-                        <TableCell className="font-mono text-violet-600 text-right">
-                          {(fold.accuracy * 100).toFixed(2)}%
-                        </TableCell>
-                        <TableCell className="font-mono text-sky-600 text-right">
-                          {(fold.f1_score * 100).toFixed(2)}%
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow className="bg-muted/50 font-semibold">
-                      <TableCell>Average</TableCell>
-                      <TableCell className="text-violet-600 text-right">
-                        {(latestExp.accuracy_mean * 100).toFixed(2)}%
-                      </TableCell>
-                      <TableCell className="text-sky-600 text-right">
-                        {(latestExp.f1_score_mean * 100).toFixed(2)}%
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+                      </p>
+                      <p className="font-bold text-gray-600 dark:text-gray-400 text-2xl">
+                        {((latestExp.baseline_f1 || 0) * 100).toFixed(2)}%
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* PROPOSED CARD */}
+              <Card className="bg-violet-50 dark:bg-violet-950/20 border-2 border-violet-300 dark:border-violet-700">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-center">
+                    <Badge className="bg-violet-100 dark:bg-violet-900/50 px-3 py-1 text-violet-700 dark:text-violet-400 text-sm">
+                      PROPOSED
+                    </Badge>
+                    <span className="text-muted-foreground text-xs">
+                      TF-IDF + InSet
+                    </span>
+                  </div>
+                  <CardTitle className="mt-2 text-lg">
+                    Dengan InSet Lexicon
+                  </CardTitle>
+                  <p className="text-muted-foreground text-xs">
+                    α = {alphaInfo.proposed.toFixed(2)} • CNB
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="gap-3 grid grid-cols-2">
+                    <div className="bg-white dark:bg-gray-900 p-3 border border-violet-200 dark:border-violet-800 rounded-lg text-center">
+                      <p className="mb-1 text-muted-foreground text-xs">
+                        Accuracy
+                      </p>
+                      <p className="font-bold text-violet-600 text-2xl">
+                        {((latestExp.proposed_accuracy || 0) * 100).toFixed(2)}%
+                      </p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-900 p-3 border border-violet-200 dark:border-violet-800 rounded-lg text-center">
+                      <p className="mb-1 text-muted-foreground text-xs">
+                        F1-Score
+                      </p>
+                      <p className="font-bold text-sky-600 text-2xl">
+                        {((latestExp.proposed_f1 || 0) * 100).toFixed(2)}%
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
 
-          {/* Riwayat Eksperimen */}
-          {experiments.length > 1 && (
-            <Card className="border">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <History className="w-5 h-5 text-muted-foreground" />
-                  <CardTitle className="text-lg">
-                    Riwayat Eksperimen ({experiments.length - 1} sebelumnya)
-                  </CardTitle>
+          {/* IMPROVEMENT BANNER */}
+          <Card className="bg-emerald-50 dark:bg-emerald-950/20 border-2 border-emerald-200 dark:border-emerald-800">
+            <CardContent className="p-6">
+              <div className="flex flex-wrap justify-center items-center gap-6">
+                <div className="text-center">
+                  <p className="text-muted-foreground text-xs">Baseline Acc</p>
+                  <p className="font-bold text-gray-500 text-2xl">
+                    {((latestExp.baseline_accuracy || 0) * 100).toFixed(2)}%
+                  </p>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="font-bold">
-                        Nama Eksperimen
-                      </TableHead>
-                      <TableHead className="font-bold text-right">
-                        Akurasi
-                      </TableHead>
-                      <TableHead className="font-bold text-right">
-                        F1-Score
-                      </TableHead>
-                      <TableHead className="font-bold text-right">
-                        Δ Acc
-                      </TableHead>
-                      <TableHead className="font-bold text-right">
-                        Tanggal
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {experiments.slice(1).map((exp: any) => (
-                      <TableRow key={exp.id} className="hover:bg-muted/30">
-                        <TableCell className="max-w-[250px] font-medium text-sm truncate">
-                          {exp.experiment_name}
-                        </TableCell>
-                        <TableCell className="font-mono text-violet-600 text-right">
-                          {(exp.accuracy_mean * 100).toFixed(2)}%
-                        </TableCell>
-                        <TableCell className="font-mono text-sky-600 text-right">
-                          {(exp.f1_score_mean * 100).toFixed(2)}%
-                        </TableCell>
-                        <TableCell className="font-mono text-emerald-600 text-right">
-                          +{exp.improvement_accuracy?.toFixed(2)}%
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs text-right">
-                          {new Date(exp.created_at).toLocaleDateString("id-ID")}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
+                <ArrowRight className="w-8 h-8 text-muted-foreground" />
+                <div className="bg-white dark:bg-gray-900 shadow-lg px-6 py-3 border-2 border-emerald-300 dark:border-emerald-700 rounded-full text-center">
+                  <TrendingUp className="mx-auto mb-1 w-6 h-6 text-emerald-600" />
+                  <p className="font-bold text-emerald-600 text-2xl">
+                    +{(latestExp.improvement_accuracy || 0).toFixed(2)}%
+                  </p>
+                  <p className="text-muted-foreground text-xs">Improvement</p>
+                </div>
+                <ArrowRight className="w-8 h-8 text-muted-foreground" />
+                <div className="text-center">
+                  <p className="text-muted-foreground text-xs">Proposed Acc</p>
+                  <p className="font-bold text-violet-600 text-2xl">
+                    {((latestExp.proposed_accuracy || 0) * 100).toFixed(2)}%
+                  </p>
+                </div>
+              </div>
+              <div className="gap-4 grid grid-cols-2 mt-6">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Accuracy Δ</span>
+                    <span className="font-bold text-emerald-600">
+                      +{(latestExp.improvement_accuracy || 0).toFixed(2)}%
+                    </span>
+                  </div>
+                  <Progress
+                    value={Math.max(0, latestExp.improvement_accuracy || 0)}
+                    className="[&>div]:bg-emerald-500 h-2"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">F1-Score Δ</span>
+                    <span className="font-bold text-sky-600">
+                      {(latestExp.improvement_f1 || 0).toFixed(2)}%
+                    </span>
+                  </div>
+                  <Progress
+                    value={Math.max(0, latestExp.improvement_f1 || 0)}
+                    className="[&>div]:bg-sky-500 h-2"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-      {!latestExp && !loading && (
+          {/* INFO CARDS */}
+          <div className="gap-3 grid grid-cols-2 lg:grid-cols-4">
+            <InfoCard
+              icon={<Target className="w-4 h-4 text-emerald-600" />}
+              label="Samples"
+              value={latestExp.total_samples}
+            />
+            <InfoCard
+              icon={<Layers className="w-4 h-4 text-amber-600" />}
+              label="Features"
+              value={latestExp.feature_count}
+            />
+            <InfoCard
+              icon={<Brain className="w-4 h-4 text-violet-600" />}
+              label="Model"
+              value={latestExp.model_type || "CNB"}
+            />
+            <InfoCard
+              icon={<Activity className="w-4 h-4 text-sky-600" />}
+              label="CV Folds"
+              value={`${latestExp.cv_folds || 10}-Fold`}
+            />
+          </div>
+        </div>
+      ) : (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-16">
             <Brain className="w-16 h-16 text-muted-foreground/20" />
@@ -368,216 +357,37 @@ export default function ModelingPage() {
   );
 }
 
-// Classification Report Component
-function ClassificationReportTable({ report }: { report: string }) {
-  const parseReport = (text: string) => {
-    const lines = text.split("\n").filter((line) => line.trim());
-    const result: any = {
-      classes: [],
-      accuracy: "",
-      macroAvg: { precision: "", recall: "", f1: "", support: "" },
-      weightedAvg: { precision: "", recall: "", f1: "", support: "" },
-    };
-    for (const line of lines) {
-      const t = line.trim();
-      if (t.includes("precision") && t.includes("recall")) continue;
-      if (t.startsWith("accuracy")) {
-        result.accuracy = t.split(/\s+/)[1] || "";
-        continue;
-      }
-      if (t.match(/^(negative|neutral|positive)\s/)) {
-        const p = t.split(/\s+/);
-        result.classes.push({
-          name: p[0],
-          precision: p[1],
-          recall: p[2],
-          f1: p[3],
-          support: p[4],
-        });
-        continue;
-      }
-      if (t.startsWith("macro avg")) {
-        const p = t.split(/\s+/);
-        result.macroAvg = {
-          precision: p[2],
-          recall: p[3],
-          f1: p[4],
-          support: p[5],
-        };
-        continue;
-      }
-      if (t.startsWith("weighted avg")) {
-        const p = t.split(/\s+/);
-        result.weightedAvg = {
-          precision: p[2],
-          recall: p[3],
-          f1: p[4],
-          support: p[5],
-        };
-      }
-    }
-    return result;
-  };
-  const data = parseReport(report);
-  const getClassBadge = (name: string) => {
-    switch (name) {
-      case "negative":
-        return (
-          <Badge className="bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400">
-            Negative
-          </Badge>
-        );
-      case "neutral":
-        return (
-          <Badge className="bg-muted text-muted-foreground">Neutral</Badge>
-        );
-      case "positive":
-        return (
-          <Badge className="bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400">
-            Positive
-          </Badge>
-        );
-      default:
-        return <Badge variant="outline">{name}</Badge>;
-    }
-  };
-  const getScoreColor = (v: string) => {
-    const n = parseFloat(v);
-    if (isNaN(n)) return "text-muted-foreground";
-    if (n >= 0.8) return "text-emerald-600 font-semibold";
-    if (n >= 0.7) return "text-sky-600 font-semibold";
-    if (n >= 0.6) return "text-amber-600 font-semibold";
-    return "text-red-600 font-semibold";
-  };
+function InfoCard({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value?: string | number;
+}) {
   return (
-    <div className="space-y-4">
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-muted/50">
-            <TableHead className="font-bold">Class</TableHead>
-            <TableHead className="font-bold text-center">Precision</TableHead>
-            <TableHead className="font-bold text-center">Recall</TableHead>
-            <TableHead className="font-bold text-center">F1-Score</TableHead>
-            <TableHead className="font-bold text-center">Support</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {data.classes.map((cls: any) => (
-            <TableRow key={cls.name} className="hover:bg-muted/30">
-              <TableCell>{getClassBadge(cls.name)}</TableCell>
-              <TableCell
-                className={`text-center font-mono ${getScoreColor(cls.precision)}`}
-              >
-                {cls.precision}
-              </TableCell>
-              <TableCell
-                className={`text-center font-mono ${getScoreColor(cls.recall)}`}
-              >
-                {cls.recall}
-              </TableCell>
-              <TableCell
-                className={`text-center font-mono ${getScoreColor(cls.f1)}`}
-              >
-                {cls.f1}
-              </TableCell>
-              <TableCell className="font-mono text-muted-foreground text-center">
-                {cls.support}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      <div className="bg-primary/10 p-3 rounded-lg text-center">
-        <span className="font-medium text-primary">Accuracy: </span>
-        <span className="font-mono font-bold text-primary">
-          {data.accuracy}
-        </span>
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-muted/50">
-            <TableHead className="font-bold">Average</TableHead>
-            <TableHead className="font-bold text-center">Precision</TableHead>
-            <TableHead className="font-bold text-center">Recall</TableHead>
-            <TableHead className="font-bold text-center">F1-Score</TableHead>
-            <TableHead className="font-bold text-center">Support</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <TableRow className="hover:bg-muted/30">
-            <TableCell>
-              <Badge variant="secondary">Macro Avg</Badge>
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.macroAvg.precision}
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.macroAvg.recall}
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.macroAvg.f1}
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.macroAvg.support}
-            </TableCell>
-          </TableRow>
-          <TableRow className="hover:bg-muted/30">
-            <TableCell>
-              <Badge variant="secondary">Weighted Avg</Badge>
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.weightedAvg.precision}
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.weightedAvg.recall}
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.weightedAvg.f1}
-            </TableCell>
-            <TableCell className="font-mono text-center">
-              {data.weightedAvg.support}
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
-    </div>
+    <Card className="hover:shadow-md transition-shadow">
+      <CardContent className="flex items-center gap-3 p-4">
+        <div className="bg-muted/50 p-2 rounded-lg shrink-0">{icon}</div>
+        <div>
+          <p className="font-medium text-muted-foreground text-xs">{label}</p>
+          <p className="font-semibold text-foreground">{value || "-"}</p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <Skeleton className="w-64 h-8" />
-        <Skeleton className="w-48 h-4" />
-      </div>
-      <div className="gap-3 grid grid-cols-2 lg:grid-cols-4">
-        {[...Array(4)].map((_, i) => (
-          <Card key={i}>
-            <CardContent className="p-4">
-              <Skeleton className="w-full h-18" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <Skeleton className="w-64 h-8" />
       <div className="gap-6 grid grid-cols-1 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <Skeleton className="w-48 h-6" />
-          </CardHeader>
-          <CardContent>
-            <Skeleton className="w-full h-64" />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <Skeleton className="w-48 h-6" />
-          </CardHeader>
-          <CardContent>
-            <Skeleton className="w-full h-64" />
-          </CardContent>
-        </Card>
+        <Skeleton className="h-48" />
+        <Skeleton className="h-48" />
       </div>
+      <Skeleton className="h-32" />
     </div>
   );
 }

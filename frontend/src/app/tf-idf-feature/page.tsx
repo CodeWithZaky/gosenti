@@ -38,15 +38,18 @@ interface TopFeature {
   idf: number;
   type: "unigram" | "bigram";
 }
+
 interface TfidfSummary {
   total_features: number;
   top_features: TopFeature[];
   stats: { mean_score: number; max_score: number; min_score: number };
 }
+
 interface WordCloudItem {
   word: string;
   score: number;
 }
+
 type SortField = "word" | "type" | "score" | "idf";
 type SortOrder = "asc" | "desc";
 
@@ -87,7 +90,17 @@ export default function TfIdfPage() {
     try {
       const res = await fetch("http://localhost:8000/api/tfidf/summary");
       const data = await res.json();
-      if (!data.error && data.top_features) setSummary(data);
+      if (!data.error && data.top_features) {
+        setSummary({
+          total_features: data.total_features || 0,
+          top_features: data.top_features || [],
+          stats: {
+            mean_score: data.stats?.mean_score || 0,
+            max_score: data.stats?.max_score || 0,
+            min_score: data.stats?.min_score || 0,
+          },
+        });
+      }
     } catch (err) {
       /* silent */
     }
@@ -107,9 +120,7 @@ export default function TfIdfPage() {
   };
 
   useEffect(() => {
-    // Fetch summary dulu (cepat), tampilkan UI
     fetchSummary().then(() => setLoading(false));
-    // Wordcloud di background (lambat)
     fetchWordcloud();
   }, []);
 
@@ -129,11 +140,12 @@ export default function TfIdfPage() {
         });
         await fetchSummary();
         fetchWordcloud();
-      } else
+      } else {
         toast.error("TF-IDF gagal!", {
           id: toastId,
           description: result.message || "Terjadi kesalahan",
         });
+      }
     } catch (error) {
       toast.error("Gagal terhubung ke server", { id: toastId });
     } finally {
@@ -142,8 +154,9 @@ export default function TfIdfPage() {
   };
 
   const handleSort = (field: SortField) => {
-    if (sortField === field) setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-    else {
+    if (sortField === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+    } else {
       setSortField(field);
       setSortOrder("desc");
     }
@@ -194,6 +207,7 @@ export default function TfIdfPage() {
   const bigramCount = summary.top_features.filter(
     (f) => f.type === "bigram",
   ).length;
+  const maxScore = summary.stats?.max_score || 1;
 
   return (
     <div className="space-y-6">
@@ -250,7 +264,7 @@ export default function TfIdfPage() {
                   Mean Score
                 </p>
                 <p className="font-bold tabular-nums text-foreground text-xl">
-                  {summary.stats.mean_score.toFixed(4)}
+                  {(summary.stats?.mean_score ?? 0).toFixed(4)}
                 </p>
                 <p className="text-muted-foreground text-xs">
                   rata-rata TF-IDF
@@ -270,7 +284,7 @@ export default function TfIdfPage() {
                   Max Score
                 </p>
                 <p className="font-bold tabular-nums text-violet-600 text-xl">
-                  {summary.stats.max_score.toFixed(4)}
+                  {(summary.stats?.max_score ?? 0).toFixed(4)}
                 </p>
                 <p className="text-muted-foreground text-xs">skor tertinggi</p>
               </div>
@@ -470,7 +484,6 @@ export default function TfIdfPage() {
                     <TableBody>
                       {sortedFeatures.map((item) => {
                         const isBigram = item.type === "bigram";
-                        const maxScore = summary.stats.max_score;
                         const pct = (item.score / maxScore) * 100;
                         return (
                           <TableRow
