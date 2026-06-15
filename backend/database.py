@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, text
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, text, JSON
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 
@@ -45,6 +45,7 @@ class SentiStrength(Base):
     label_sentistrength = Column(String(50))
     ss_max_positive = Column(Integer)
     ss_max_negative = Column(Integer)
+    word_details = Column(JSON, nullable=True, comment="Detail kata positif/negatif dari SentiStrength")
 
     news = relationship("News", back_populates="sentistrength")
 
@@ -115,13 +116,13 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
-    # print("Menghapus database lama...")
+    print("Menghapus database lama...")
     
-    # # RESET TOTAL: Hapus seluruh schema public lalu buat ulang
-    # with engine.connect() as conn:
-    #     conn.execute(text("DROP SCHEMA public CASCADE"))
-    #     conn.execute(text("CREATE SCHEMA public"))
-    #     conn.commit()
+    # RESET TOTAL: Hapus seluruh schema public lalu buat ulang
+    with engine.connect() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+        conn.commit()
     
     print("Menciptakan tabel di database PostgreSQL...")
     Base.metadata.create_all(bind=engine)
