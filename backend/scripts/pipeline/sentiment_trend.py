@@ -1,3 +1,4 @@
+# scripts/pipeline/sentiment_trend.py
 import sys
 import os
 import pandas as pd

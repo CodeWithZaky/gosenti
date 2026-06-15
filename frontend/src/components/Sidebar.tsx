@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   Puzzle,
   Tag,
-  Trash2,
   TrendingUp,
 } from "lucide-react";
 import Link from "next/link";
@@ -23,7 +22,7 @@ const navigationItems = [
 
 const dataMasterItems = [
   { title: "News Data", href: "/news-data", icon: FileText },
-  { title: "Deduplication Data", href: "/deduplication", icon: Trash2 },
+  // { title: "Deduplication Data", href: "/deduplication", icon: Trash2 },
 ];
 
 const pipelineItems = [

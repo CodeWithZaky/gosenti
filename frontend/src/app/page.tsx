@@ -7,11 +7,16 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Layers,
   Minus,
   Newspaper,
   PieChart as PieChartIcon,
+  Search,
+  Target,
   ThumbsDown,
   ThumbsUp,
+  TrendingUp,
+  Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -30,24 +35,30 @@ import {
   YAxis,
 } from "recharts";
 
-export default function TrendDashboard() {
+export default function DashboardPage() {
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
   const [yearlyData, setYearlyData] = useState<any[]>([]);
   const [pieData, setPieData] = useState<any[]>([]);
   const [totals, setTotals] = useState({ pos: 0, neu: 0, neg: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<any>(null);
 
   const COLORS = { pos: "#10b981", neu: "#94a3b8", neg: "#ef4444" };
 
   useEffect(() => {
-    const fetchTrendData = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/dashboard/trend");
-        const json = await res.json();
+        const [trendRes, statsRes] = await Promise.all([
+          fetch("http://localhost:8000/api/dashboard/trend"),
+          fetch("http://localhost:8000/api/stats"),
+        ]);
 
-        if (json.status === "success") {
-          const data = json.data;
+        const trendJson = await trendRes.json();
+        const statsJson = await statsRes.json();
+
+        if (trendJson.status === "success") {
+          const data = trendJson.data;
           setMonthlyData(data);
 
           let totalPos = 0,
@@ -75,22 +86,25 @@ export default function TrendDashboard() {
             { name: "Negatif", value: totalNeg, color: COLORS.neg },
           ]);
 
-          const yearlyArray = Object.values(yearMap).sort((a: any, b: any) =>
-            a.year.localeCompare(b.year),
+          setYearlyData(
+            Object.values(yearMap).sort((a: any, b: any) =>
+              a.year.localeCompare(b.year),
+            ),
           );
-          setYearlyData(yearlyArray);
-        } else {
-          setError(json.message || "Gagal mengambil data");
+        }
+
+        if (statsJson) {
+          setStats(statsJson);
         }
       } catch (err) {
-        console.error("Gagal mengambil data chart", err);
+        console.error("Gagal mengambil data", err);
         setError("Gagal terhubung ke server");
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchTrendData();
+    fetchData();
   }, []);
 
   if (isLoading) return <DashboardSkeleton />;
@@ -120,29 +134,189 @@ export default function TrendDashboard() {
     totalAll > 0 ? ((totals.neu / totalAll) * 100).toFixed(1) : "0";
   const negativePercentage =
     totalAll > 0 ? ((totals.neg / totalAll) * 100).toFixed(1) : "0";
+  const avgPositivePerMonth = Math.round(
+    totals.pos / (monthlyData.length || 1),
+  );
+  const avgNeutralPerMonth = Math.round(totals.neu / (monthlyData.length || 1));
+  const avgNegativePerMonth = Math.round(
+    totals.neg / (monthlyData.length || 1),
+  );
 
   return (
     <div className="space-y-6 min-h-screen">
-      {/* Header */}
+      {/* ============================================================ */}
+      {/* HEADER */}
+      {/* ============================================================ */}
       <div>
-        <div className="flex items-center gap-3 mb-2">
-          {/* <div className="bg-primary p-2 rounded-xl">
-            <Activity className="w-6 h-6 text-primary-foreground" />
-          </div> */}
-          <div>
-            <h1 className="font-bold text-foreground text-3xl">
-              Analisis Tren Sentimen
-            </h1>
-            <p className="mt-1 text-muted-foreground">
-              Perkembangan sentimen berita dari tahun 2025 hingga 2026
-            </p>
-          </div>
-        </div>
+        <h1 className="font-bold text-foreground text-3xl">
+          Analisis Tren Sentimen
+        </h1>
+        <p className="mt-1 text-muted-foreground">
+          Dashboard analisis sentimen berita ekonomi Indonesia 2025-2026
+        </p>
       </div>
 
-      {/* Summary Cards */}
-      <div className="gap-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="border">
+      {/* ============================================================ */}
+      {/* ABSTRAK / RINGKASAN PENELITIAN */}
+      {/* ============================================================ */}
+      <Card className="bg-linear-to-br from-violet-50 dark:from-violet-950/20 via-white dark:via-gray-950 to-sky-50 dark:to-sky-950/20 shadow-lg border-2 border-violet-100 dark:border-violet-900/50">
+        <CardContent className="p-6">
+          <div className="gap-6 grid grid-cols-1 lg:grid-cols-3">
+            {/* Kolom 1: Tentang Penelitian */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="bg-violet-100 dark:bg-violet-900/50 p-1.5 rounded-lg">
+                  <Newspaper className="w-4 h-4 text-violet-600" />
+                </div>
+                <h3 className="font-semibold text-foreground text-sm">
+                  Tentang Penelitian
+                </h3>
+              </div>
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                Analisis sentimen berita ekonomi menggunakan metode{" "}
+                <span className="font-semibold text-violet-600">
+                  Complement Naive Bayes (CNB)
+                </span>{" "}
+                dengan kombinasi fitur{" "}
+                <span className="font-semibold text-violet-600">TF-IDF</span>{" "}
+                dan{" "}
+                <span className="font-semibold text-violet-600">
+                  InSet Lexicon
+                </span>
+                . Penelitian menggunakan dataset berita dari portal ekonomi
+                Indonesia.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary" className="text-xs">
+                  CNB
+                </Badge>
+                <Badge variant="secondary" className="text-xs">
+                  TF-IDF
+                </Badge>
+                <Badge variant="secondary" className="text-xs">
+                  InSet Lexicon
+                </Badge>
+                <Badge variant="secondary" className="text-xs">
+                  10-Fold CV
+                </Badge>
+              </div>
+            </div>
+
+            {/* Kolom 2: Metodologi */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="bg-sky-100 dark:bg-sky-900/50 p-1.5 rounded-lg">
+                  <Layers className="w-4 h-4 text-sky-600" />
+                </div>
+                <h3 className="font-semibold text-foreground text-sm">
+                  Metodologi
+                </h3>
+              </div>
+              <div className="space-y-1.5">
+                {[
+                  {
+                    step: 1,
+                    text: "Scraping berita ekonomi dari portal berita",
+                    icon: <Newspaper className="w-3 h-3" />,
+                  },
+                  {
+                    step: 2,
+                    text: "Preprocessing & pelabelan SentiStrength",
+                    icon: <Search className="w-3 h-3" />,
+                  },
+                  {
+                    step: 3,
+                    text: "Ekstraksi fitur TF-IDF + InSet Lexicon",
+                    icon: <Zap className="w-3 h-3" />,
+                  },
+                  {
+                    step: 4,
+                    text: "Klasifikasi CNB + Grid Search (100 trials)",
+                    icon: <Target className="w-3 h-3" />,
+                  },
+                  {
+                    step: 5,
+                    text: "Evaluasi 10-Fold Cross Validation",
+                    icon: <BarChart3 className="w-3 h-3" />,
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.step}
+                    className="flex items-center gap-2 text-muted-foreground text-sm"
+                  >
+                    <Badge
+                      variant="outline"
+                      className="flex justify-center items-center p-0 rounded-full w-5 h-5 text-xs"
+                    >
+                      {item.step}
+                    </Badge>
+                    {item.icon}
+                    <span>{item.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Kolom 3: Hasil Utama */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="bg-emerald-100 dark:bg-emerald-900/50 p-1.5 rounded-lg">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" />
+                </div>
+                <h3 className="font-semibold text-foreground text-sm">
+                  Hasil Utama
+                </h3>
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center bg-white dark:bg-gray-900 p-2.5 border rounded-lg">
+                  <span className="text-sm">Total Dataset</span>
+                  <span className="font-bold">
+                    {totalAll.toLocaleString()} berita
+                  </span>
+                </div>
+                <div className="flex justify-between items-center bg-white dark:bg-gray-900 p-2.5 border rounded-lg">
+                  <span className="text-sm">Periode</span>
+                  <span className="font-medium text-sm">2025 - 2026</span>
+                </div>
+                <div className="flex justify-between items-center bg-white dark:bg-gray-900 p-2.5 border rounded-lg">
+                  <span className="text-sm">Distribusi Sentimen</span>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-medium text-green-600">
+                      {positivePercentage}% Pos
+                    </span>
+                    <span className="text-gray-400">|</span>
+                    <span className="font-medium text-red-600">
+                      {negativePercentage}% Neg
+                    </span>
+                  </div>
+                </div>
+                {stats && (
+                  <>
+                    <div className="flex justify-between items-center bg-white dark:bg-gray-900 p-2.5 border rounded-lg">
+                      <span className="text-sm">Akurasi Model (CNB)</span>
+                      <span className="font-bold text-violet-600">
+                        {((stats.accuracy || 0) * 100).toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center bg-white dark:bg-gray-900 p-2.5 border rounded-lg">
+                      <span className="text-sm">F1-Score Model</span>
+                      <span className="font-bold text-sky-600">
+                        {((stats.f1_score || 0) * 100).toFixed(2)}%
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ============================================================ */}
+      {/* SUMMARY CARDS */}
+      {/* ============================================================ */}
+      <div className="gap-4 grid grid-cols-2 lg:grid-cols-4">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardHeader className="flex flex-row justify-between items-center space-y-0 pb-2">
             <CardTitle className="font-medium text-muted-foreground text-sm">
               Total Berita
@@ -154,15 +328,15 @@ export default function TrendDashboard() {
               {totalAll.toLocaleString()}
             </div>
             <p className="mt-1 text-muted-foreground text-xs">
-              Keseluruhan data
+              {monthlyData.length} bulan data
             </p>
           </CardContent>
         </Card>
 
-        <Card className="border">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardHeader className="flex flex-row justify-between items-center space-y-0 pb-2">
             <CardTitle className="font-medium text-green-600 text-sm">
-              Sentimen Positif
+              Positif
             </CardTitle>
             <ThumbsUp className="w-4 h-4 text-green-500" />
           </CardHeader>
@@ -171,21 +345,20 @@ export default function TrendDashboard() {
               {totals.pos.toLocaleString()}
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <Badge
-                variant="secondary"
-                className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
-              >
+              <Badge className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs">
                 {positivePercentage}%
               </Badge>
-              <span className="text-muted-foreground text-xs">dari total</span>
+              <span className="text-muted-foreground text-xs">
+                ±{avgPositivePerMonth}/bln
+              </span>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardHeader className="flex flex-row justify-between items-center space-y-0 pb-2">
             <CardTitle className="font-medium text-muted-foreground text-sm">
-              Sentimen Neutral
+              Neutral
             </CardTitle>
             <Minus className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
@@ -194,16 +367,20 @@ export default function TrendDashboard() {
               {totals.neu.toLocaleString()}
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <Badge variant="secondary">{neutralPercentage}%</Badge>
-              <span className="text-muted-foreground text-xs">dari total</span>
+              <Badge variant="secondary" className="text-xs">
+                {neutralPercentage}%
+              </Badge>
+              <span className="text-muted-foreground text-xs">
+                ±{avgNeutralPerMonth}/bln
+              </span>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardHeader className="flex flex-row justify-between items-center space-y-0 pb-2">
             <CardTitle className="font-medium text-red-600 text-sm">
-              Sentimen Negatif
+              Negatif
             </CardTitle>
             <ThumbsDown className="w-4 h-4 text-red-500" />
           </CardHeader>
@@ -212,25 +389,29 @@ export default function TrendDashboard() {
               {totals.neg.toLocaleString()}
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <Badge
-                variant="secondary"
-                className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-              >
+              <Badge className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-xs">
                 {negativePercentage}%
               </Badge>
-              <span className="text-muted-foreground text-xs">dari total</span>
+              <span className="text-muted-foreground text-xs">
+                ±{avgNegativePerMonth}/bln
+              </span>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Area Chart */}
-      <Card className="border">
+      {/* ============================================================ */}
+      {/* AREA CHART - TREN BULANAN */}
+      {/* ============================================================ */}
+      <Card className="shadow-md border">
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Activity className="w-5 h-5 text-primary" />
-            <CardTitle>Tren Sentimen Bulanan</CardTitle>
+            <Activity className="w-5 h-5 text-violet-600" />
+            <CardTitle>Tren Sentimen Bulanan (2025-2026)</CardTitle>
           </div>
+          <p className="text-muted-foreground text-sm">
+            Fluktuasi jumlah berita positif, neutral, dan negatif per bulan
+          </p>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={400}>
@@ -302,15 +483,43 @@ export default function TrendDashboard() {
               />
             </AreaChart>
           </ResponsiveContainer>
+
+          {/* Rata-rata per bulan */}
+          <div className="gap-4 grid grid-cols-3 bg-muted/30 mt-4 p-3 rounded-lg">
+            <div className="text-center">
+              <p className="text-muted-foreground text-xs">Rata-rata/bulan</p>
+              <p className="font-bold text-green-600 text-lg">
+                {avgPositivePerMonth.toLocaleString()}
+              </p>
+              <p className="text-muted-foreground text-xs">Positif</p>
+            </div>
+            <div className="text-center">
+              <p className="text-muted-foreground text-xs">Rata-rata/bulan</p>
+              <p className="font-bold text-gray-500 text-lg">
+                {avgNeutralPerMonth.toLocaleString()}
+              </p>
+              <p className="text-muted-foreground text-xs">Neutral</p>
+            </div>
+            <div className="text-center">
+              <p className="text-muted-foreground text-xs">Rata-rata/bulan</p>
+              <p className="font-bold text-red-600 text-lg">
+                {avgNegativePerMonth.toLocaleString()}
+              </p>
+              <p className="text-muted-foreground text-xs">Negatif</p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
-      {/* Bar Chart & Pie Chart */}
+      {/* ============================================================ */}
+      {/* BAR CHART + PIE CHART */}
+      {/* ============================================================ */}
       <div className="gap-6 grid grid-cols-1 lg:grid-cols-3">
-        <Card className="lg:col-span-2 border">
+        {/* Bar Chart - Tahunan */}
+        <Card className="lg:col-span-2 shadow-md border">
           <CardHeader>
             <div className="flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-primary" />
+              <BarChart3 className="w-5 h-5 text-sky-600" />
               <CardTitle>Perbandingan Sentimen Tahunan</CardTitle>
             </div>
           </CardHeader>
@@ -348,30 +557,31 @@ export default function TrendDashboard() {
                   dataKey="positive"
                   name="Positif"
                   fill={COLORS.pos}
-                  radius={[4, 4, 0, 0]}
+                  radius={[6, 6, 0, 0]}
                 />
                 <Bar
                   dataKey="neutral"
                   name="Neutral"
                   fill={COLORS.neu}
-                  radius={[4, 4, 0, 0]}
+                  radius={[6, 6, 0, 0]}
                 />
                 <Bar
                   dataKey="negative"
                   name="Negatif"
                   fill={COLORS.neg}
-                  radius={[4, 4, 0, 0]}
+                  radius={[6, 6, 0, 0]}
                 />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        <Card className="border">
+        {/* Pie Chart - Distribusi */}
+        <Card className="shadow-md border">
           <CardHeader>
             <div className="flex items-center gap-2">
-              <PieChartIcon className="w-5 h-5 text-primary" />
-              <CardTitle>Distribusi Total</CardTitle>
+              <PieChartIcon className="w-5 h-5 text-emerald-600" />
+              <CardTitle>Distribusi Sentimen</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
@@ -427,6 +637,11 @@ export default function TrendDashboard() {
                 <span className="text-muted-foreground text-sm">Negatif</span>
               </div>
             </div>
+            <p className="mt-4 text-muted-foreground text-xs text-center">
+              Total {totalAll.toLocaleString()} berita • {positivePercentage}%
+              Positif, {neutralPercentage}% Neutral, {negativePercentage}%
+              Negatif
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -434,14 +649,15 @@ export default function TrendDashboard() {
   );
 }
 
+// ============================================================
+// SKELETON LOADING
+// ============================================================
 function DashboardSkeleton() {
   return (
-    <div className="space-y-6 p-8">
-      <div className="space-y-2">
-        <Skeleton className="w-64 h-8" />
-        <Skeleton className="w-96 h-4" />
-      </div>
-      <div className="gap-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
+    <div className="space-y-6">
+      <Skeleton className="w-64 h-8" />
+      <Skeleton className="w-full h-48" />
+      <div className="gap-4 grid grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
           <Card key={i}>
             <CardHeader>

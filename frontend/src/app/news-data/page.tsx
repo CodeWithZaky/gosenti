@@ -4,6 +4,12 @@ import { LoadMoreButton } from "@/components/LoadMoreButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -19,10 +25,11 @@ import {
   Clock,
   ExternalLink,
   Globe,
+  Info,
   Newspaper,
   TrendingUp,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 interface NewsItem {
   guid: string;
@@ -50,6 +57,8 @@ export default function NewsDataPage() {
     const result = await res.json();
     return { items: result.items, pagination: result.pagination };
   });
+
+  const [selectedItem, setSelectedItem] = useState<NewsItem | null>(null);
 
   useEffect(() => {
     loadMore();
@@ -199,7 +208,7 @@ export default function NewsDataPage() {
                   <TableHead className="w-[160px] font-bold">
                     Tanggal Publikasi
                   </TableHead>
-                  <TableHead className="w-[100px] font-bold text-center">
+                  <TableHead className="w-[140px] font-bold text-center">
                     Aksi
                   </TableHead>
                 </TableRow>
@@ -248,7 +257,7 @@ export default function NewsDataPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5 text-muted-foreground">
-                          <Calendar className="flex-shrink-0 w-3.5 h-3.5" />
+                          <Calendar className="w-3.5 h-3.5 shrink-0" />
                           <span className="text-sm whitespace-nowrap">
                             {item.published_at
                               ? new Date(item.published_at).toLocaleDateString(
@@ -263,17 +272,27 @@ export default function NewsDataPage() {
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-center">
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <Button variant="ghost" size="sm">
-                            <ExternalLink className="mr-1.5 w-4 h-4" />
-                            Buka
+                      <TableCell>
+                        <div className="flex justify-center items-center gap-1">
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Button variant="ghost" size="sm">
+                              <ExternalLink className="mr-1.5 w-4 h-4" />
+                              Buka
+                            </Button>
+                          </a>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setSelectedItem(item)}
+                          >
+                            <Info className="mr-1.5 w-4 h-4" />
+                            Detail
                           </Button>
-                        </a>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -283,6 +302,140 @@ export default function NewsDataPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Detail Dialog */}
+      <Dialog open={!!selectedItem} onOpenChange={() => setSelectedItem(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-bold text-xl">
+              Detail Berita
+            </DialogTitle>
+          </DialogHeader>
+
+          {selectedItem && (
+            <div className="space-y-6 py-4">
+              {/* Judul */}
+              <div className="space-y-2">
+                <label className="font-medium text-muted-foreground text-sm uppercase tracking-wider">
+                  Judul Berita
+                </label>
+                <p className="font-semibold text-foreground text-lg">
+                  {selectedItem.title}
+                </p>
+              </div>
+
+              {/* Grid Info */}
+              <div className="gap-4 grid grid-cols-1 md:grid-cols-2">
+                {/* GUID */}
+                <div className="space-y-1">
+                  <label className="font-medium text-muted-foreground text-sm">
+                    GUID
+                  </label>
+                  <p className="bg-muted p-2 rounded-md font-mono text-sm break-all">
+                    {selectedItem.guid}
+                  </p>
+                </div>
+
+                {/* Portal */}
+                <div className="space-y-1">
+                  <label className="font-medium text-muted-foreground text-sm">
+                    Portal
+                  </label>
+                  <div>
+                    <Badge variant="outline" className="font-medium">
+                      <Globe className="mr-1 w-3 h-3" />
+                      {selectedItem.portal_name}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* URL */}
+                <div className="space-y-1 md:col-span-2">
+                  <label className="font-medium text-muted-foreground text-sm">
+                    URL Berita
+                  </label>
+                  <a
+                    href={selectedItem.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-primary text-sm hover:underline break-all"
+                  >
+                    {selectedItem.url}
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                  </a>
+                </div>
+
+                {/* Tanggal Publikasi */}
+                <div className="space-y-1">
+                  <label className="font-medium text-muted-foreground text-sm">
+                    Tanggal Publikasi
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-muted-foreground" />
+                    <p className="text-sm">
+                      {selectedItem.published_at
+                        ? new Date(
+                            selectedItem.published_at,
+                          ).toLocaleDateString("id-ID", {
+                            weekday: "long",
+                            day: "numeric",
+                            month: "long",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
+                        : "Tidak tersedia"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Tanggal Scraping */}
+                <div className="space-y-1">
+                  <label className="font-medium text-muted-foreground text-sm">
+                    Tanggal Scraping
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-muted-foreground" />
+                    <p className="text-sm">
+                      {selectedItem.scraped_at
+                        ? new Date(selectedItem.scraped_at).toLocaleDateString(
+                            "id-ID",
+                            {
+                              weekday: "long",
+                              day: "numeric",
+                              month: "long",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            },
+                          )
+                        : "Tidak tersedia"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Button */}
+              <div className="flex justify-end gap-2 pt-4 border-t">
+                <Button variant="outline" onClick={() => setSelectedItem(null)}>
+                  Tutup
+                </Button>
+                <a
+                  href={selectedItem.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Button>
+                    <ExternalLink className="mr-2 w-4 h-4" />
+                    Buka Berita
+                  </Button>
+                </a>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <LoadMoreButton
         onClick={loadMore}
@@ -323,7 +476,7 @@ function LoadingSkeleton() {
                 </div>
                 <Skeleton className="w-20 h-6" />
                 <Skeleton className="w-24 h-4" />
-                <Skeleton className="w-16 h-8" />
+                <Skeleton className="w-32 h-8" />
               </div>
             ))}
           </div>
