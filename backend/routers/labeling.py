@@ -1,50 +1,27 @@
+# routers/labeling.py
+
 import os
 import re
 from collections import Counter, defaultdict
 
-import numpy as np
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from database import InsetFeature, News, Preprocessing, SentiStrength
+from database import Preprocessing, SentiStrength
 from utils.db import get_db, paginate_query
 from utils.lexicon import (
+    SENTI_PATH,
     load_booster_words,
     load_negation_words,
     load_sentiwords,
     strip_punct,
 )
 
-router = APIRouter(prefix="/api/data", tags=["Data"])
-
-SENTI_PATH = os.path.join("lexicons", "sentistrength_id")
+router = APIRouter(prefix="/api/data/sentistrength", tags=["Labeling"])
 
 
-# ── Preprocessing ─────────────────────────────────────────────────────────────
-
-@router.get("/preprocessing")
-def get_preprocessing_data(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
-):
-    query = (
-        db.query(Preprocessing, News)
-        .join(News, Preprocessing.news_guid == News.guid)
-        .order_by(Preprocessing.id.desc())
-    )
-    result = paginate_query(query, page, page_size)
-    items = [
-        {"guid": prep.news_guid, "original_title": news.title, "clean_title": prep.clean_title}
-        for prep, news in result["items"]
-    ]
-    return {"items": items, "pagination": result["pagination"]}
-
-
-# ── SentiStrength ──────────────────────────────────────────────────────────────
-
-@router.get("/sentistrength")
+@router.get("")
 def get_sentistrength_data(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -63,22 +40,28 @@ def get_sentistrength_data(
             "label": s.label_sentistrength,
             "pos": s.ss_max_positive,
             "neg": s.ss_max_negative,
+            "word_summary": {
+                "positive_count": len(s.word_details.get("positive_words", [])) if s.word_details else 0,
+                "negative_count": len(s.word_details.get("negative_words", [])) if s.word_details else 0,
+                "has_details": s.word_details is not None,
+            } if s.word_details else None,
         }
         for s, p in result["items"]
     ]
     return {"items": items, "pagination": result["pagination"]}
 
 
-@router.get("/sentistrength/stats")
+@router.get("/stats")
 def get_sentistrength_stats(db: Session = Depends(get_db)):
     total = db.query(SentiStrength).count()
     counts = {
-        label: db.query(SentiStrength).filter(SentiStrength.label_sentistrength == label).count()
+        label: db.query(SentiStrength)
+        .filter(SentiStrength.label_sentistrength == label)
+        .count()
         for label in ("positive", "neutral", "negative")
     }
     avg_pos = db.query(func.avg(SentiStrength.ss_max_positive)).scalar() or 0
     avg_neg = db.query(func.avg(SentiStrength.ss_max_negative)).scalar() or 0
-
     return {
         "status": "success",
         "data": {
@@ -90,13 +73,11 @@ def get_sentistrength_stats(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/sentistrength/distribution")
+@router.get("/distribution")
 def get_sentistrength_distribution(db: Session = Depends(get_db)):
-    rows = db.query(
-        SentiStrength.ss_max_positive,
-        SentiStrength.ss_max_negative,
-    ).all()
+    import numpy as np
 
+    rows = db.query(SentiStrength.ss_max_positive, SentiStrength.ss_max_negative).all()
     pos_scores = [r[0] for r in rows if r[0] is not None]
     neg_scores = [r[1] for r in rows if r[1] is not None]
 
@@ -110,31 +91,34 @@ def get_sentistrength_distribution(db: Session = Depends(get_db)):
             "max": int(np.max(scores)),
         }
 
-    pos_dist = {
-        "0": sum(1 for s in pos_scores if s == 0),
-        "1-3": sum(1 for s in pos_scores if 1 <= s <= 3),
-        "4-6": sum(1 for s in pos_scores if 4 <= s <= 6),
-        "7-9": sum(1 for s in pos_scores if 7 <= s <= 9),
-        "10+": sum(1 for s in pos_scores if s >= 10),
-    }
-    neg_dist = {
-        "0": sum(1 for s in neg_scores if s == 0),
-        "(-1)-(-3)": sum(1 for s in neg_scores if -3 <= s <= -1),
-        "(-4)-(-6)": sum(1 for s in neg_scores if -6 <= s <= -4),
-        "(-7)-(-9)": sum(1 for s in neg_scores if -9 <= s <= -7),
-        "(-10)+": sum(1 for s in neg_scores if s <= -10),
-    }
-
     return {
         "status": "success",
         "data": {
-            "positive": {**_stats(pos_scores), "distribution": pos_dist},
-            "negative": {**_stats(neg_scores), "distribution": neg_dist},
+            "positive": {
+                **_stats(pos_scores),
+                "distribution": {
+                    "0": sum(1 for s in pos_scores if s == 0),
+                    "1-3": sum(1 for s in pos_scores if 1 <= s <= 3),
+                    "4-6": sum(1 for s in pos_scores if 4 <= s <= 6),
+                    "7-9": sum(1 for s in pos_scores if 7 <= s <= 9),
+                    "10+": sum(1 for s in pos_scores if s >= 10),
+                },
+            },
+            "negative": {
+                **_stats(neg_scores),
+                "distribution": {
+                    "0": sum(1 for s in neg_scores if s == 0),
+                    "(-1)-(-3)": sum(1 for s in neg_scores if -3 <= s <= -1),
+                    "(-4)-(-6)": sum(1 for s in neg_scores if -6 <= s <= -4),
+                    "(-7)-(-9)": sum(1 for s in neg_scores if -9 <= s <= -7),
+                    "(-10)+": sum(1 for s in neg_scores if s <= -10),
+                },
+            },
         },
     }
 
 
-@router.get("/sentistrength/coverage")
+@router.get("/coverage")
 def get_sentistrength_coverage(db: Session = Depends(get_db)):
     sentiwords = load_sentiwords()
     negation_words = load_negation_words()
@@ -143,7 +127,6 @@ def get_sentistrength_coverage(db: Session = Depends(get_db)):
     lexicon_positive = {w for w, s in sentiwords.items() if s > 0}
     lexicon_negative = {w for w, s in sentiwords.items() if s < 0}
 
-    # Tambah idiom & emoticon
     for fname, sep in [("idioms_id.txt", ":"), ("emoticon_id.txt", "|")]:
         path = os.path.join(SENTI_PATH, fname)
         if os.path.exists(path):
@@ -163,7 +146,6 @@ def get_sentistrength_coverage(db: Session = Depends(get_db)):
     rows = db.query(Preprocessing.clean_title).all()
 
     all_words, known, unknown, negation_found, booster_found = [], [], [], [], []
-
     for (text,) in rows:
         if not text:
             continue
@@ -213,17 +195,15 @@ def get_sentistrength_coverage(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/sentistrength/unknown-words")
-def get_sentistrength_unknown_words(db: Session = Depends(get_db)):
-    lexicon_dir = SENTI_PATH
-    lexicon_words: set[str] = set()
-
-    if os.path.exists(lexicon_dir):
-        for fname in os.listdir(lexicon_dir):
+@router.get("/unknown-words")
+def get_unknown_words(db: Session = Depends(get_db)):
+    lexicon_words: set = set()
+    if os.path.exists(SENTI_PATH):
+        for fname in os.listdir(SENTI_PATH):
             if not fname.endswith(".txt"):
                 continue
             try:
-                with open(os.path.join(lexicon_dir, fname), encoding="utf-8", errors="ignore") as f:
+                with open(os.path.join(SENTI_PATH, fname), encoding="utf-8", errors="ignore") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith(("#", "//")):
@@ -242,7 +222,6 @@ def get_sentistrength_unknown_words(db: Session = Depends(get_db)):
 
     unknown_counter: Counter = Counter()
     examples = []
-
     for pos, neg, label, text in rows:
         if not text:
             continue
@@ -271,14 +250,13 @@ def get_sentistrength_unknown_words(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/sentistrength/negation-examples")
+@router.get("/negation-examples")
 def get_negation_examples(db: Session = Depends(get_db)):
     negation_words = load_negation_words()
     sentiwords = load_sentiwords()
     rows = db.query(Preprocessing.clean_title).all()
 
     found: defaultdict = defaultdict(lambda: {"count": 0, "documents": []})
-
     for (text,) in rows:
         if not text:
             continue
@@ -304,14 +282,13 @@ def get_negation_examples(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/sentistrength/booster-examples")
+@router.get("/booster-examples")
 def get_booster_examples(db: Session = Depends(get_db)):
     booster_words = load_booster_words()
     sentiwords = load_sentiwords()
     rows = db.query(Preprocessing.clean_title).all()
 
     found: defaultdict = defaultdict(lambda: {"count": 0, "documents": []})
-
     for (text,) in rows:
         if not text:
             continue
@@ -340,8 +317,8 @@ def get_booster_examples(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/sentistrength/all-negation")
-def get_all_negation_data(db: Session = Depends(get_db)):
+@router.get("/all-negation")
+def get_all_negation(db: Session = Depends(get_db)):
     negation_words = load_negation_words()
     sentiwords = load_sentiwords()
     rows = db.query(Preprocessing.clean_title).all()
@@ -366,8 +343,8 @@ def get_all_negation_data(db: Session = Depends(get_db)):
     return {"status": "success", "data": {"total": len(results), "results": results}}
 
 
-@router.get("/sentistrength/all-booster")
-def get_all_booster_data(db: Session = Depends(get_db)):
+@router.get("/all-booster")
+def get_all_booster(db: Session = Depends(get_db)):
     booster_words = load_booster_words()
     sentiwords = load_sentiwords()
     rows = db.query(Preprocessing.clean_title).all()
@@ -396,57 +373,29 @@ def get_all_booster_data(db: Session = Depends(get_db)):
     return {"status": "success", "data": {"total": len(results), "results": results}}
 
 
-# ── InsetFeature ───────────────────────────────────────────────────────────────
+# ── Endpoint detail per dokumen (baru) ────────────────────────────────────────
 
-@router.get("/features")
-def get_features_data(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    sort_by: str = Query("id"),
-    sort_order: str = Query("desc"),
-    db: Session = Depends(get_db),
-):
-    all_pos = [p[0] for p in db.query(InsetFeature.inset_pos).all() if p[0] is not None]
-    all_neg = [n[0] for n in db.query(InsetFeature.inset_neg).all() if n[0] is not None]
-
-    if not all_pos or not all_neg:
-        empty_page = {"page": 1, "page_size": page_size, "total": 0, "total_pages": 0, "has_more": False}
-        return {"items": [], "pagination": empty_page, "stats": {}}
-
-    min_pos, max_pos = min(all_pos), max(all_pos)
-    min_neg, max_neg = min(all_neg), max(all_neg)
-
-    stats = {
-        "max_pos": max_pos, "min_pos": min_pos,
-        "max_neg": max_neg, "min_neg": min_neg,
-        "avg_pos": round(sum(all_pos) / len(all_pos), 2),
-        "avg_neg": round(sum(all_neg) / len(all_neg), 2),
-        "total": len(all_pos),
-        "has_both": sum(1 for p, n in zip(all_pos, all_neg) if p > 0 and n < 0),
-    }
-
-    sort_col = {"pos": InsetFeature.inset_pos, "neg": InsetFeature.inset_neg}.get(sort_by, InsetFeature.id)
-    order = sort_col.asc() if sort_order == "asc" else sort_col.desc()
-
-    query = (
-        db.query(InsetFeature, Preprocessing)
-        .join(Preprocessing, InsetFeature.news_guid == Preprocessing.news_guid)
-        .order_by(order)
+@router.get("/{guid}/words")
+def get_sentistrength_words(guid: str, db: Session = Depends(get_db)):
+    """Kata-kata positif dan negatif beserta bobotnya untuk satu dokumen."""
+    result = (
+        db.query(SentiStrength, Preprocessing)
+        .join(Preprocessing, SentiStrength.news_guid == Preprocessing.news_guid)
+        .filter(SentiStrength.news_guid == guid)
+        .first()
     )
-    result = paginate_query(query, page, page_size)
+    if not result:
+        raise HTTPException(status_code=404, detail="Data tidak ditemukan")
 
-    def _norm(val, mn, mx):
-        return round((val - mn) / (mx - mn), 4) if mx > mn else 0.0
+    senti, prep = result
+    word_details = senti.word_details or {}
 
-    items = [
-        {
-            "guid": feat.news_guid,
+    return {
+        "status": "success",
+        "data": {
+            "guid": guid,
             "clean_title": prep.clean_title,
-            "inset_pos": feat.inset_pos or 0,
-            "inset_neg": feat.inset_neg or 0,
-            "inset_pos_norm": _norm(feat.inset_pos, min_pos, max_pos),
-            "inset_neg_norm": _norm(feat.inset_neg, min_neg, max_neg),
-        }
-        for feat, prep in result["items"]
-    ]
-    return {"items": items, "pagination": result["pagination"], "stats": stats}
+            "positive_words": word_details.get("positive_words", []),
+            "negative_words": word_details.get("negative_words", []),
+        },
+    }
