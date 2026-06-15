@@ -1,3 +1,4 @@
+# scripts/pipeline/inset_feature.py
 import sys
 import os
 import pandas as pd

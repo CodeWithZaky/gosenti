@@ -15,7 +15,7 @@ from sklearn.preprocessing import LabelEncoder
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(backend_dir)
 
-from database import SessionLocal, SentiStrength, InsetFeature, ExperimentResult, CvFold
+from database import News, SessionLocal, SentiStrength, InsetFeature, ExperimentResult, CvFold
 
 def run_modeling_pipeline():
     def log(msg):
