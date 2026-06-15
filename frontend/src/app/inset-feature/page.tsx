@@ -22,21 +22,28 @@ import {
 } from "@/components/ui/table";
 import { useLoadMore } from "@/hooks/useLoadMore";
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Bug,
   Eye,
   FileText,
   Hash,
+  Info,
   Loader2,
   Minus,
   Play,
   Plus,
   Puzzle,
+  RefreshCw,
+  ServerCrash,
   TrendingDown,
   TrendingUp,
+  WifiOff,
+  XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 interface InsetFeatureItem {
@@ -78,6 +85,16 @@ interface InsetWordDetails {
 type SortField = "pos" | "neg";
 type SortOrder = "asc" | "desc";
 
+// Error detail interface
+interface ErrorDetail {
+  type: "network" | "server" | "data" | "timeout" | "unknown";
+  message: string;
+  statusCode?: number;
+  endpoint?: string;
+  timestamp: Date;
+  rawError?: string;
+}
+
 // Kategori berdasarkan nilai normalisasi
 function getCategory(norm: number, raw: number) {
   if (raw === 0)
@@ -118,6 +135,21 @@ export default function InsetFeaturePage() {
   );
   const [sortField, setSortField] = useState<SortField>("pos");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+
+  // Error states - menyimpan array error detail
+  const [errors, setErrors] = useState<ErrorDetail[]>([]);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 3;
+  const POLL_INTERVAL = 2000;
+  const MAX_POLL_ATTEMPTS = 30;
+  const pollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollAttemptRef = useRef(0);
+  const mountedRef = useRef(true);
+  const initialLoadDoneRef = useRef(false);
+
   const [stats, setStats] = useState<InsetStats>({
     max_pos: 0,
     min_pos: 0,
@@ -129,9 +161,187 @@ export default function InsetFeaturePage() {
     has_both: 0,
   });
 
-  // State untuk dialog detail kata
   const [wordDetails, setWordDetails] = useState<InsetWordDetails | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+
+  // Helper untuk menambah error
+  const addError = useCallback((error: ErrorDetail) => {
+    setErrors((prev) => [...prev, error]);
+  }, []);
+
+  // Helper untuk clear errors
+  const clearErrors = useCallback(() => {
+    setErrors([]);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Fungsi fetch data dengan error handling yang TIDAK melempar error
+  const fetchInsetFeatureData = useCallback(
+    async (page: number, pageSize: number) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const endpoint = `http://localhost:8000/api/data/features?page=${page}&page_size=${pageSize}`;
+
+      try {
+        const res = await fetch(endpoint, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+          },
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const statusCode = res.status;
+          let serverMessage = "";
+
+          try {
+            const errorData = await res.json();
+            serverMessage =
+              errorData.message ||
+              errorData.detail ||
+              JSON.stringify(errorData);
+          } catch {
+            serverMessage = `HTTP ${statusCode} - ${res.statusText}`;
+          }
+
+          addError({
+            type: statusCode >= 500 ? "server" : "data",
+            message: `Server error (${statusCode})`,
+            statusCode,
+            endpoint,
+            timestamp: new Date(),
+            rawError: serverMessage,
+          });
+
+          return {
+            items: [],
+            pagination: {
+              page: 1,
+              page_size: pageSize,
+              total: 0,
+              total_pages: 0,
+            },
+          };
+        }
+
+        const result = await res.json();
+
+        // Validasi struktur data
+        if (!result || typeof result !== "object") {
+          addError({
+            type: "data",
+            message: "Respons server tidak valid (bukan object JSON)",
+            endpoint,
+            timestamp: new Date(),
+            rawError: typeof result,
+          });
+          return {
+            items: [],
+            pagination: {
+              page: 1,
+              page_size: pageSize,
+              total: 0,
+              total_pages: 0,
+            },
+          };
+        }
+
+        if (!result.items || !Array.isArray(result.items)) {
+          addError({
+            type: "data",
+            message:
+              "Format data tidak sesuai: field 'items' tidak ditemukan atau bukan array",
+            endpoint,
+            timestamp: new Date(),
+            rawError: JSON.stringify(Object.keys(result)),
+          });
+          return {
+            items: [],
+            pagination: {
+              page: 1,
+              page_size: pageSize,
+              total: 0,
+              total_pages: 0,
+            },
+          };
+        }
+
+        // Update stats jika tersedia
+        if (result.stats) {
+          setStats(result.stats);
+        }
+
+        // Clear errors on success
+        if (page === 1) {
+          clearErrors();
+        }
+        retryCountRef.current = 0;
+
+        return { items: result.items, pagination: result.pagination };
+      } catch (err: unknown) {
+        clearTimeout(timeoutId);
+
+        let errorDetail: ErrorDetail;
+
+        if (err instanceof DOMException && err.name === "AbortError") {
+          errorDetail = {
+            type: "timeout",
+            message:
+              "Request timeout (15 detik) - Server tidak merespons tepat waktu",
+            endpoint,
+            timestamp: new Date(),
+            rawError: err.message,
+          };
+        } else if (
+          err instanceof TypeError &&
+          err.message === "Failed to fetch"
+        ) {
+          errorDetail = {
+            type: "network",
+            message:
+              "Gagal terhubung ke server - Server mungkin tidak berjalan atau CORS bermasalah",
+            endpoint,
+            timestamp: new Date(),
+            rawError: `${err.message}. Pastikan server berjalan di http://localhost:8000`,
+          };
+        } else {
+          errorDetail = {
+            type: "unknown",
+            message:
+              err instanceof Error ? err.message : "Kesalahan tidak diketahui",
+            endpoint,
+            timestamp: new Date(),
+            rawError: err instanceof Error ? err.stack : String(err),
+          };
+        }
+
+        addError(errorDetail);
+
+        return {
+          items: [],
+          pagination: {
+            page: 1,
+            page_size: pageSize,
+            total: 0,
+            total_pages: 0,
+          },
+        };
+      }
+    },
+    [addError, clearErrors],
+  );
 
   const {
     items: data,
@@ -142,43 +352,296 @@ export default function InsetFeaturePage() {
     pagination,
     loadMore,
     reset,
-  } = useLoadMore<InsetFeatureItem>(async (page, pageSize) => {
-    const res = await fetch(
-      `http://localhost:8000/api/data/features?page=${page}&page_size=${pageSize}`,
-    );
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const result = await res.json();
-    if (result.stats) setStats(result.stats);
-    return { items: result.items, pagination: result.pagination };
-  });
+  } = useLoadMore<InsetFeatureItem>(fetchInsetFeatureData);
 
-  useEffect(() => {
-    loadMore();
+  // Polling untuk mengecek status InSet Feature
+  const pollInsetStatus = useCallback(async (): Promise<boolean> => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const res = await fetch("http://localhost:8000/api/pipeline/status", {
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const result = await res.json();
+        if (
+          result.status === "completed" ||
+          result.inset_feature_done === true
+        ) {
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    if (initialLoadDoneRef.current) return;
+    initialLoadDoneRef.current = true;
+
+    const init = async () => {
+      try {
+        await loadMore();
+      } catch {
+        // Error sudah di-handle
+      }
+    };
+
+    init();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runInsetFeature = async () => {
     setIsRunning(true);
-    const toastId = toast.loading("Menjalankan InSet Feature...");
+    const endpoint = "http://localhost:8000/api/pipeline/inset_feature";
+
+    const toastId = toast.loading("Menjalankan InSet Feature...", {
+      description: "Proses ini mungkin memakan waktu beberapa saat",
+    });
+
     try {
-      const res = await fetch(
-        "http://localhost:8000/api/pipeline/inset_feature",
-        { method: "POST" },
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000);
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const statusCode = res.status;
+        let serverMessage = "";
+
+        try {
+          const errorData = await res.json();
+          serverMessage =
+            errorData.message || errorData.detail || JSON.stringify(errorData);
+        } catch {
+          serverMessage = `HTTP ${statusCode} - ${res.statusText}`;
+        }
+
+        addError({
+          type: statusCode >= 500 ? "server" : "data",
+          message: `Pipeline gagal (${statusCode})`,
+          statusCode,
+          endpoint,
+          timestamp: new Date(),
+          rawError: serverMessage,
+        });
+
+        if (statusCode === 404) {
+          toast.error("Endpoint InSet Feature tidak ditemukan", {
+            id: toastId,
+            description: "Pastikan API pipeline tersedia",
+          });
+        } else if (statusCode === 409) {
+          toast.warning("InSet Feature sudah berjalan", {
+            id: toastId,
+            description: "Tunggu proses sebelumnya selesai",
+          });
+        } else if (statusCode === 422) {
+          toast.error("Data SentiStrength belum tersedia", {
+            id: toastId,
+            description:
+              serverMessage || "Jalankan SentiStrength terlebih dahulu",
+          });
+        } else {
+          toast.error("InSet Feature gagal!", {
+            id: toastId,
+            description: serverMessage,
+          });
+        }
+        setIsRunning(false);
+        return;
+      }
+
       const result = await res.json();
+
       if (result.status === "success") {
-        toast.success("InSet Feature berhasil!", { id: toastId });
+        toast.success("InSet Feature berhasil!", {
+          id: toastId,
+          description: result.message || "Data telah diproses",
+        });
+
+        clearErrors();
         reset();
-        setTimeout(() => loadMore(), 500);
+        pollAttemptRef.current = 0;
+
+        const pollForData = async () => {
+          if (!mountedRef.current) return;
+
+          pollAttemptRef.current++;
+
+          if (pollAttemptRef.current > MAX_POLL_ATTEMPTS) {
+            toast.info("Masih memproses data...", {
+              description: "Data mungkin belum sepenuhnya tersedia",
+            });
+            try {
+              await loadMore();
+            } catch {
+              // Silent
+            }
+            setIsRunning(false);
+            return;
+          }
+
+          const isReady = await pollInsetStatus();
+
+          if (isReady) {
+            try {
+              await loadMore();
+              setIsRunning(false);
+            } catch {
+              if (mountedRef.current) {
+                toast.error("Gagal memuat data setelah InSet Feature", {
+                  description: "Silakan muat ulang halaman",
+                });
+              }
+              setIsRunning(false);
+            }
+          } else {
+            pollTimeoutRef.current = setTimeout(pollForData, POLL_INTERVAL);
+          }
+        };
+
+        pollTimeoutRef.current = setTimeout(pollForData, 1500);
+      } else if (result.status === "running") {
+        toast.info("InSet Feature sedang berjalan", {
+          id: toastId,
+          description: "Proses sedang berlangsung di background",
+        });
+
+        pollAttemptRef.current = 0;
+        const pollRunning = async () => {
+          if (!mountedRef.current) return;
+
+          pollAttemptRef.current++;
+
+          if (pollAttemptRef.current > MAX_POLL_ATTEMPTS) {
+            toast.warning("InSet Feature mungkin masih berjalan", {
+              description: "Refresh halaman untuk melihat status terbaru",
+            });
+            setIsRunning(false);
+            return;
+          }
+
+          const isReady = await pollInsetStatus();
+
+          if (isReady) {
+            toast.success("InSet Feature selesai!", {
+              description: "Memuat data terbaru...",
+            });
+            clearErrors();
+            reset();
+            try {
+              await loadMore();
+            } catch {
+              // Silent
+            }
+            setIsRunning(false);
+          } else {
+            pollTimeoutRef.current = setTimeout(pollRunning, POLL_INTERVAL);
+          }
+        };
+
+        pollTimeoutRef.current = setTimeout(pollRunning, POLL_INTERVAL);
       } else {
+        addError({
+          type: "unknown",
+          message: `Status respons tidak dikenal: ${result.status}`,
+          endpoint,
+          timestamp: new Date(),
+          rawError: JSON.stringify(result),
+        });
         toast.error("InSet Feature gagal!", {
           id: toastId,
-          description: result.message || "Terjadi kesalahan",
+          description: result.message || "Status respons tidak dikenal",
+        });
+        setIsRunning(false);
+      }
+    } catch (err: unknown) {
+      let errorDetail: ErrorDetail;
+
+      if (err instanceof DOMException && err.name === "AbortError") {
+        errorDetail = {
+          type: "timeout",
+          message: "Pipeline timeout (5 menit) - Proses terlalu lama",
+          endpoint,
+          timestamp: new Date(),
+          rawError: err.message,
+        };
+        toast.warning("InSet Feature timeout", {
+          id: toastId,
+          description:
+            "Proses terlalu lama. Mungkin masih berjalan di background.",
+        });
+      } else if (
+        err instanceof TypeError &&
+        err.message === "Failed to fetch"
+      ) {
+        errorDetail = {
+          type: "network",
+          message: "Gagal terhubung ke server saat menjalankan pipeline",
+          endpoint,
+          timestamp: new Date(),
+          rawError: err.message,
+        };
+        toast.error("Gagal terhubung ke server", {
+          id: toastId,
+          description: "Pastikan server backend berjalan",
+        });
+      } else {
+        errorDetail = {
+          type: "unknown",
+          message:
+            err instanceof Error ? err.message : "Kesalahan tidak diketahui",
+          endpoint,
+          timestamp: new Date(),
+          rawError: err instanceof Error ? err.stack : String(err),
+        };
+        toast.error("Gagal menjalankan InSet Feature", {
+          id: toastId,
+          description: errorDetail.message,
         });
       }
-    } catch (err) {
-      toast.error("Gagal terhubung ke server", { id: toastId });
-    } finally {
+
+      addError(errorDetail);
       setIsRunning(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    if (retryCountRef.current >= MAX_RETRIES) {
+      toast.error("Batas percobaan tercapai", {
+        description: `Gagal setelah ${MAX_RETRIES}x percobaan.`,
+      });
+      return;
+    }
+
+    setIsRetrying(true);
+    retryCountRef.current++;
+    clearErrors();
+
+    try {
+      reset();
+      await loadMore();
+    } catch {
+      // Error sudah di-handle
+    } finally {
+      if (mountedRef.current) {
+        setIsRetrying(false);
+      }
     }
   };
 
@@ -196,20 +659,72 @@ export default function InsetFeaturePage() {
     setWordDetails(null);
     setLoadingDetails(true);
 
+    const endpoint = `http://localhost:8000/api/data/features/${item.guid}/words`;
+
     try {
-      const res = await fetch(
-        `http://localhost:8000/api/data/features/${item.guid}/words`,
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const res = await fetch(endpoint, {
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const result = await res.json();
         if (result.status === "success") {
           setWordDetails(result.data);
+        } else {
+          toast.error("Format data detail kata tidak valid");
+          addError({
+            type: "data",
+            message: "Format data detail kata tidak valid",
+            endpoint,
+            timestamp: new Date(),
+            rawError: JSON.stringify(result),
+          });
+        }
+      } else {
+        if (res.status === 404) {
+          toast.info("Detail kata tidak tersedia untuk item ini");
+        } else {
+          toast.error(`Gagal mengambil detail kata (HTTP ${res.status})`);
+          addError({
+            type: "server",
+            message: `Gagal mengambil detail kata (HTTP ${res.status})`,
+            statusCode: res.status,
+            endpoint,
+            timestamp: new Date(),
+          });
         }
       }
     } catch (err) {
-      // silent
+      if (err instanceof DOMException && err.name === "AbortError") {
+        toast.error("Timeout mengambil detail kata");
+        addError({
+          type: "timeout",
+          message: "Timeout mengambil detail kata (10 detik)",
+          endpoint,
+          timestamp: new Date(),
+        });
+      } else if (
+        err instanceof TypeError &&
+        err.message === "Failed to fetch"
+      ) {
+        toast.error("Gagal terhubung ke server");
+        addError({
+          type: "network",
+          message: "Gagal terhubung ke server saat mengambil detail kata",
+          endpoint,
+          timestamp: new Date(),
+          rawError: err.message,
+        });
+      }
     } finally {
-      setLoadingDetails(false);
+      if (mountedRef.current) {
+        setLoadingDetails(false);
+      }
     }
   };
 
@@ -233,6 +748,176 @@ export default function InsetFeaturePage() {
     );
   };
 
+  // Komponen Error Display
+  const ErrorDisplay = () => {
+    if (errors.length === 0) return null;
+
+    const latestError = errors[errors.length - 1];
+    const hasNetworkError = errors.some((e) => e.type === "network");
+    const hasServerError = errors.some((e) => e.type === "server");
+    const hasTimeout = errors.some((e) => e.type === "timeout");
+
+    const getErrorIcon = () => {
+      if (hasNetworkError) return <WifiOff className="w-5 h-5" />;
+      if (hasTimeout) return <AlertTriangle className="w-5 h-5" />;
+      if (hasServerError) return <ServerCrash className="w-5 h-5" />;
+      return <Bug className="w-5 h-5" />;
+    };
+
+    const getErrorColor = () => {
+      if (hasNetworkError)
+        return "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/30";
+      if (hasTimeout)
+        return "border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/30";
+      if (hasServerError)
+        return "border-orange-400 dark:border-orange-600 bg-orange-50 dark:bg-orange-950/30";
+      return "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-950/30";
+    };
+
+    return (
+      <Card className={`border-2 ${getErrorColor()} shadow-lg`}>
+        <CardContent className="space-y-3 p-4">
+          {/* Header Error */}
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex items-center gap-2">
+              <div className="bg-white dark:bg-gray-800 p-1.5 rounded-full">
+                {getErrorIcon()}
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">
+                  {hasNetworkError && "Koneksi Gagal"}
+                  {hasTimeout && !hasNetworkError && "Request Timeout"}
+                  {hasServerError &&
+                    !hasNetworkError &&
+                    !hasTimeout &&
+                    "Server Error"}
+                  {!hasNetworkError &&
+                    !hasTimeout &&
+                    !hasServerError &&
+                    "Error"}
+                </h3>
+                <p className="text-muted-foreground text-xs">
+                  {errors.length} error terjadi • Terakhir:{" "}
+                  {latestError.timestamp.toLocaleTimeString()}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowErrorDetails(!showErrorDetails)}
+                className="h-7 text-xs"
+              >
+                {showErrorDetails ? "Sembunyikan" : "Detail"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearErrors}
+                className="h-7 text-xs"
+              >
+                <XCircle className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Pesan Error Utama */}
+          <div className="bg-white dark:bg-gray-900 p-3 border rounded-lg">
+            <div className="flex items-start gap-2">
+              <Info className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0" />
+              <div>
+                <p className="font-medium text-sm">{latestError.message}</p>
+                {latestError.endpoint && (
+                  <p className="mt-1 font-mono text-muted-foreground text-xs">
+                    Endpoint: {latestError.endpoint}
+                  </p>
+                )}
+                {latestError.statusCode && (
+                  <p className="text-muted-foreground text-xs">
+                    Status: {latestError.statusCode}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Detail Error (Collapsible) */}
+          {showErrorDetails && (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              <p className="font-medium text-muted-foreground text-xs">
+                Semua Error ({errors.length}):
+              </p>
+              {errors.map((err, i) => (
+                <div
+                  key={i}
+                  className="space-y-1 bg-white dark:bg-gray-900 p-2.5 border rounded-lg text-xs"
+                >
+                  <div className="flex justify-between items-center">
+                    <Badge
+                      variant="outline"
+                      className={
+                        err.type === "network"
+                          ? "border-red-300 text-red-600"
+                          : err.type === "timeout"
+                            ? "border-amber-300 text-amber-600"
+                            : err.type === "server"
+                              ? "border-orange-300 text-orange-600"
+                              : "border-yellow-300 text-yellow-600"
+                      }
+                    >
+                      {err.type.toUpperCase()}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {err.timestamp.toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="font-medium">{err.message}</p>
+                  {err.endpoint && (
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      {err.endpoint}
+                    </p>
+                  )}
+                  {err.rawError && (
+                    <div className="bg-muted/50 p-2 rounded font-mono text-[10px] break-all whitespace-pre-wrap">
+                      {err.rawError}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Tombol Aksi */}
+          <div className="flex justify-between items-center pt-1">
+            <p className="text-muted-foreground text-xs">
+              Retry: {retryCountRef.current}/{MAX_RETRIES}
+            </p>
+            <Button
+              onClick={handleRetry}
+              disabled={isRetrying || retryCountRef.current >= MAX_RETRIES}
+              size="sm"
+              variant="default"
+              className="gap-1"
+            >
+              {isRetrying ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3 h-3" />
+              )}
+              {retryCountRef.current >= MAX_RETRIES
+                ? "Batas Tercapai"
+                : "Coba Lagi"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // ============================================================
+  // RENDER: LOADING STATE
+  // ============================================================
   if (initialLoading) return <LoadingSkeleton />;
 
   return (
@@ -263,6 +948,9 @@ export default function InsetFeaturePage() {
           )}
         </Button>
       </div>
+
+      {/* ERROR DISPLAY - Ditampilkan di konten */}
+      <ErrorDisplay />
 
       {/* Stats Cards */}
       <div className="gap-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -370,21 +1058,40 @@ export default function InsetFeaturePage() {
         </Card>
       </div>
 
-      {/* Table */}
+      {/* Table atau Empty State */}
       {sortedData.length === 0 && !loading ? (
         <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-16">
-            <Puzzle className="w-16 h-16 text-muted-foreground/20" />
-            <p className="text-muted-foreground text-lg">
-              Belum ada data fitur InSet
-            </p>
+          <CardContent className="flex flex-col items-center gap-4 py-16">
+            <div className="bg-amber-100 dark:bg-amber-900/20 p-4 rounded-full">
+              <Puzzle className="w-12 h-12 text-amber-400" />
+            </div>
+            <div className="space-y-2 text-center">
+              <h3 className="font-semibold text-lg">Belum Ada Data</h3>
+              <p className="max-w-md text-muted-foreground">
+                Belum ada data fitur InSet yang tersedia. Klik tombol di bawah
+                untuk memulai proses ekstraksi fitur.
+              </p>
+            </div>
             <Button
               onClick={runInsetFeature}
-              className="bg-amber-600 hover:bg-amber-700"
+              disabled={isRunning}
+              className="gap-2 bg-amber-600 hover:bg-amber-700"
             >
-              <Play className="mr-2 w-4 h-4" />
-              Jalankan InSet Feature
+              {isRunning ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" />
+                  Jalankan InSet Feature
+                </>
+              )}
             </Button>
+            <p className="text-muted-foreground text-xs">
+              Pastikan data SentiStrength sudah tersedia sebelum menjalankan
+            </p>
           </CardContent>
         </Card>
       ) : (
@@ -428,7 +1135,6 @@ export default function InsetFeaturePage() {
                       item.inset_pos,
                     );
                     const negCat = getCategory(
-                      // Normalisasi negatif: gunakan nilai absolut
                       item.inset_neg !== 0
                         ? Math.abs(item.inset_neg) /
                             Math.abs(stats.min_neg || 1)
@@ -442,7 +1148,9 @@ export default function InsetFeaturePage() {
                         className="hover:bg-muted/30 transition-colors"
                       >
                         <TableCell className="font-medium text-muted-foreground text-center">
-                          {index + 1}
+                          {(pagination.page - 1) * pagination.page_size +
+                            index +
+                            1}
                         </TableCell>
                         <TableCell>
                           <p className="max-w-[400px] text-foreground text-sm line-clamp-2">
@@ -451,7 +1159,6 @@ export default function InsetFeaturePage() {
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1.5">
-                            {/* Skor raw sebagai fokus utama */}
                             <div className="flex justify-between items-center gap-2">
                               <span className="font-bold text-emerald-600 text-lg">
                                 +{item.inset_pos}
@@ -463,7 +1170,6 @@ export default function InsetFeaturePage() {
                                 {posCat.label}
                               </Badge>
                             </div>
-                            {/* Progress bar kecil sebagai indikator */}
                             <Progress
                               value={
                                 item.inset_pos_norm
@@ -479,7 +1185,6 @@ export default function InsetFeaturePage() {
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1.5">
-                            {/* Skor raw negatif */}
                             <div className="flex justify-between items-center gap-2">
                               <span className="font-bold text-red-600 text-lg">
                                 {item.inset_neg}
@@ -491,7 +1196,6 @@ export default function InsetFeaturePage() {
                                 {negCat.label}
                               </Badge>
                             </div>
-                            {/* Progress bar untuk nilai absolut negatif */}
                             <Progress
                               value={
                                 item.inset_neg !== 0 && stats.min_neg !== 0
@@ -536,7 +1240,7 @@ export default function InsetFeaturePage() {
         />
       )}
 
-      {/* Dialog Detail dengan Kata Pemicu */}
+      {/* Dialog Detail */}
       <Dialog
         open={!!selectedItem}
         onOpenChange={(open) => {
@@ -555,7 +1259,6 @@ export default function InsetFeaturePage() {
 
           {selectedItem && (
             <div className="space-y-4 mt-4">
-              {/* Teks Bersih */}
               <div className="bg-muted/50 p-4 border rounded-lg">
                 <p className="mb-2 font-medium text-muted-foreground text-xs uppercase tracking-wider">
                   Teks Bersih
@@ -565,7 +1268,6 @@ export default function InsetFeaturePage() {
                 </p>
               </div>
 
-              {/* Ringkasan Skor */}
               <div className="gap-4 grid grid-cols-2">
                 <div className="bg-emerald-50 dark:bg-emerald-950/30 p-4 border border-emerald-100 dark:border-emerald-800 rounded-lg">
                   <TrendingUp className="mb-2 w-5 h-5 text-emerald-600" />
@@ -601,7 +1303,6 @@ export default function InsetFeaturePage() {
                 </div>
               </div>
 
-              {/* Net Score */}
               <div className="bg-muted/50 p-4 border rounded-lg text-center">
                 <p className="mb-1 text-muted-foreground text-xs">
                   Net Score (Positif + Negatif)
@@ -622,7 +1323,6 @@ export default function InsetFeaturePage() {
                 </p>
               </div>
 
-              {/* Detail Kata Pemicu */}
               {loadingDetails ? (
                 <div className="flex justify-center items-center py-8">
                   <Loader2 className="w-6 h-6 text-muted-foreground animate-spin" />
@@ -632,7 +1332,6 @@ export default function InsetFeaturePage() {
                 </div>
               ) : wordDetails ? (
                 <div className="space-y-4">
-                  {/* Kata Positif */}
                   {wordDetails.positive_words.length > 0 && (
                     <div className="border rounded-lg overflow-hidden">
                       <div className="bg-emerald-50 dark:bg-emerald-950/30 px-4 py-2 border-emerald-100 dark:border-emerald-800 border-b">
@@ -671,7 +1370,6 @@ export default function InsetFeaturePage() {
                     </div>
                   )}
 
-                  {/* Kata Negatif */}
                   {wordDetails.negative_words.length > 0 && (
                     <div className="border rounded-lg overflow-hidden">
                       <div className="bg-red-50 dark:bg-red-950/30 px-4 py-2 border-red-100 dark:border-red-800 border-b">
@@ -710,7 +1408,6 @@ export default function InsetFeaturePage() {
                     </div>
                   )}
 
-                  {/* Tidak ada kata yang match */}
                   {wordDetails.positive_words.length === 0 &&
                     wordDetails.negative_words.length === 0 && (
                       <div className="py-6 text-muted-foreground text-center">
@@ -720,11 +1417,18 @@ export default function InsetFeaturePage() {
                 </div>
               ) : (
                 <div className="py-6 text-muted-foreground text-sm text-center">
-                  Gagal memuat detail kata
+                  Gagal memuat detail kata.{" "}
+                  <button
+                    onClick={() =>
+                      selectedItem && handleOpenDetail(selectedItem)
+                    }
+                    className="text-amber-600 hover:underline"
+                  >
+                    Coba lagi
+                  </button>
                 </div>
               )}
 
-              {/* GUID */}
               <div className="text-center">
                 <Badge variant="secondary" className="text-xs">
                   GUID: {selectedItem.guid}

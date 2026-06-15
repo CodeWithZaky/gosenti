@@ -23,18 +23,25 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Activity,
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   BarChart3,
+  Bug,
   Calculator,
   Calendar,
   Cpu,
   Database,
   FileText,
+  Info,
   Layers,
+  Loader2,
   RefreshCw,
+  ServerCrash,
   TrendingUp,
+  WifiOff,
+  XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -138,6 +145,16 @@ interface TTestResult {
   alpha: number;
   description: string;
 }
+
+interface ErrorDetail {
+  type: "network" | "server" | "data" | "timeout" | "unknown";
+  message: string;
+  statusCode?: number;
+  endpoint?: string;
+  timestamp: Date;
+  rawError?: string;
+}
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -174,52 +191,399 @@ export default function EvaluationPage() {
   const [loading, setLoading] = useState(true);
   const [cmDetail, setCmDetail] = useState<ConfusionMatrixDetail | null>(null);
   const [ttest, setTtest] = useState<TTestResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+
+  // Error states
+  const [errors, setErrors] = useState<ErrorDetail[]>([]);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [partialError, setPartialError] = useState(false);
+
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 3;
+  const mountedRef = useRef(true);
+
+  const addError = useCallback((error: ErrorDetail) => {
+    setErrors((prev) => [...prev, error]);
+  }, []);
+
+  const clearErrors = useCallback(() => {
+    setErrors([]);
+    setPartialError(false);
+  }, []);
 
   useEffect(() => {
-    fetchData();
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   const fetchData = async () => {
     setLoading(true);
-    setError(null);
+    clearErrors();
+
+    const cmEndpoint = "http://localhost:8000/api/evaluation/confusion-matrix";
+    const ttestEndpoint = "http://localhost:8000/api/evaluation/ttest";
+
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+
       const [cmRes, ttestRes] = await Promise.all([
-        fetch("http://localhost:8000/api/evaluation/confusion-matrix"),
-        fetch("http://localhost:8000/api/evaluation/ttest"),
+        fetch(cmEndpoint, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        }),
+        fetch(ttestEndpoint, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        }),
       ]);
-      const cmData = await cmRes.json();
-      const ttestData = await ttestRes.json();
 
-      if (cmData.status === "success") setCmDetail(cmData.data);
-      else setError(cmData.detail || "Gagal mengambil data");
+      clearTimeout(timeoutId);
 
-      if (ttestData.status === "success") setTtest(ttestData.data);
-    } catch (err) {
-      setError("Gagal terhubung ke server");
+      // Handle CM response
+      if (!cmRes.ok) {
+        const statusCode = cmRes.status;
+        let serverMessage = "";
+        try {
+          const errorData = await cmRes.json();
+          serverMessage =
+            errorData.message || errorData.detail || JSON.stringify(errorData);
+        } catch {
+          serverMessage = `HTTP ${statusCode} - ${cmRes.statusText}`;
+        }
+        addError({
+          type: statusCode >= 500 ? "server" : "data",
+          message: `Gagal mengambil confusion matrix (${statusCode})`,
+          statusCode,
+          endpoint: cmEndpoint,
+          timestamp: new Date(),
+          rawError: serverMessage,
+        });
+      } else {
+        const cmData = await cmRes.json();
+        if (cmData.status === "success") {
+          setCmDetail(cmData.data);
+        } else {
+          addError({
+            type: "data",
+            message: "Format data confusion matrix tidak sesuai",
+            endpoint: cmEndpoint,
+            timestamp: new Date(),
+            rawError: JSON.stringify(cmData),
+          });
+        }
+      }
+
+      // Handle TTest response
+      if (!ttestRes.ok) {
+        const statusCode = ttestRes.status;
+        let serverMessage = "";
+        try {
+          const errorData = await ttestRes.json();
+          serverMessage =
+            errorData.message || errorData.detail || JSON.stringify(errorData);
+        } catch {
+          serverMessage = `HTTP ${statusCode} - ${ttestRes.statusText}`;
+        }
+        addError({
+          type: statusCode >= 500 ? "server" : "data",
+          message: `Gagal mengambil uji statistik (${statusCode})`,
+          statusCode,
+          endpoint: ttestEndpoint,
+          timestamp: new Date(),
+          rawError: serverMessage,
+        });
+        setPartialError(true);
+      } else {
+        const ttestData = await ttestRes.json();
+        if (ttestData.status === "success") {
+          setTtest(ttestData.data);
+        } else {
+          setPartialError(true);
+        }
+      }
+
+      retryCountRef.current = 0;
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        addError({
+          type: "timeout",
+          message: "Request timeout (20 detik) - Server tidak merespons",
+          endpoint: cmEndpoint,
+          timestamp: new Date(),
+          rawError: err.message,
+        });
+      } else if (
+        err instanceof TypeError &&
+        err.message === "Failed to fetch"
+      ) {
+        addError({
+          type: "network",
+          message: "Gagal terhubung ke server - Server mungkin tidak berjalan",
+          endpoint: cmEndpoint,
+          timestamp: new Date(),
+          rawError: `${err.message}. Pastikan server berjalan di http://localhost:8000`,
+        });
+      } else {
+        addError({
+          type: "unknown",
+          message:
+            err instanceof Error ? err.message : "Kesalahan tidak diketahui",
+          endpoint: cmEndpoint,
+          timestamp: new Date(),
+          rawError: err instanceof Error ? err.stack : String(err),
+        });
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
+  useEffect(() => {
+    fetchData();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRetry = async () => {
+    if (retryCountRef.current >= MAX_RETRIES) return;
+    setIsRetrying(true);
+    retryCountRef.current++;
+    await fetchData();
+    if (mountedRef.current) setIsRetrying(false);
+  };
+
+  // Komponen Error Display
+  const ErrorDisplay = () => {
+    if (errors.length === 0) return null;
+
+    const latestError = errors[errors.length - 1];
+    const hasNetworkError = errors.some((e) => e.type === "network");
+    const hasServerError = errors.some((e) => e.type === "server");
+    const hasTimeout = errors.some((e) => e.type === "timeout");
+
+    const getErrorIcon = () => {
+      if (hasNetworkError) return <WifiOff className="w-5 h-5" />;
+      if (hasTimeout) return <AlertTriangle className="w-5 h-5" />;
+      if (hasServerError) return <ServerCrash className="w-5 h-5" />;
+      return <Bug className="w-5 h-5" />;
+    };
+
+    const getErrorColor = () => {
+      if (hasNetworkError)
+        return "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/30";
+      if (hasTimeout)
+        return "border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/30";
+      if (hasServerError)
+        return "border-orange-400 dark:border-orange-600 bg-orange-50 dark:bg-orange-950/30";
+      return "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-950/30";
+    };
+
+    const getErrorTitle = () => {
+      if (hasNetworkError) return "Koneksi Gagal";
+      if (hasTimeout) return "Request Timeout";
+      if (hasServerError) return "Server Error";
+      return "Error";
+    };
+
+    return (
+      <Card className={`border-2 ${getErrorColor()} shadow-lg`}>
+        <CardContent className="space-y-3 p-4">
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex items-center gap-2">
+              <div className="bg-white dark:bg-gray-800 p-1.5 rounded-full">
+                {getErrorIcon()}
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">{getErrorTitle()}</h3>
+                <p className="text-muted-foreground text-xs">
+                  {errors.length} error •{" "}
+                  {latestError.timestamp.toLocaleTimeString()}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowErrorDetails(!showErrorDetails)}
+                className="h-7 text-xs"
+              >
+                {showErrorDetails ? "Sembunyikan" : "Detail"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearErrors}
+                className="h-7 text-xs"
+              >
+                <XCircle className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-gray-900 p-3 border rounded-lg">
+            <div className="flex items-start gap-2">
+              <Info className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0" />
+              <div>
+                <p className="font-medium text-sm">{latestError.message}</p>
+                {latestError.endpoint && (
+                  <p className="mt-1 font-mono text-muted-foreground text-xs">
+                    {latestError.endpoint}
+                  </p>
+                )}
+                {latestError.statusCode && (
+                  <p className="text-muted-foreground text-xs">
+                    Status: {latestError.statusCode}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {showErrorDetails && (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              <p className="font-medium text-muted-foreground text-xs">
+                Semua Error ({errors.length}):
+              </p>
+              {errors.map((err, i) => (
+                <div
+                  key={i}
+                  className="space-y-1 bg-white dark:bg-gray-900 p-2.5 border rounded-lg text-xs"
+                >
+                  <div className="flex justify-between items-center">
+                    <Badge
+                      variant="outline"
+                      className={
+                        err.type === "network"
+                          ? "border-red-300 text-red-600"
+                          : err.type === "timeout"
+                            ? "border-amber-300 text-amber-600"
+                            : err.type === "server"
+                              ? "border-orange-300 text-orange-600"
+                              : "border-yellow-300 text-yellow-600"
+                      }
+                    >
+                      {err.type.toUpperCase()}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {err.timestamp.toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="font-medium">{err.message}</p>
+                  {err.rawError && (
+                    <div className="bg-muted/50 p-2 rounded font-mono text-[10px] break-all whitespace-pre-wrap">
+                      {err.rawError}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-between items-center pt-1">
+            <p className="text-muted-foreground text-xs">
+              Retry: {retryCountRef.current}/{MAX_RETRIES}
+            </p>
+            <Button
+              onClick={handleRetry}
+              disabled={isRetrying || retryCountRef.current >= MAX_RETRIES}
+              size="sm"
+              variant="default"
+              className="gap-1"
+            >
+              {isRetrying ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3 h-3" />
+              )}
+              {retryCountRef.current >= MAX_RETRIES
+                ? "Batas Tercapai"
+                : "Coba Lagi"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // ============================================================
+  // RENDER: LOADING STATE
+  // ============================================================
   if (loading) return <LoadingSkeleton />;
 
-  if (error || !cmDetail) {
+  // ============================================================
+  // RENDER: FULL ERROR STATE
+  // ============================================================
+  if (!cmDetail && errors.length > 0) {
     return (
-      <div className="flex justify-center items-center p-12 min-h-[60vh]">
-        <Card className="w-full max-w-md text-center">
-          <CardHeader>
-            <div className="flex justify-center mb-2">
-              <AlertCircle className="w-10 h-10 text-muted-foreground/30" />
+      <div className="space-y-6">
+        <div>
+          <h1 className="font-bold text-foreground text-3xl">Evaluasi Model</h1>
+          <p className="mt-2 text-muted-foreground">
+            Analisis perbandingan performa model
+          </p>
+        </div>
+        <ErrorDisplay />
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-16">
+            <div className="bg-red-100 dark:bg-red-900/20 p-4 rounded-full">
+              <AlertCircle className="w-12 h-12 text-red-400" />
             </div>
-            <CardTitle>Belum Ada Data</CardTitle>
-            <CardDescription>
-              {error || "Jalankan training terlebih dahulu"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button onClick={fetchData} variant="outline">
-              <RefreshCw className="mr-2 w-4 h-4" />
+            <div className="space-y-2 text-center">
+              <h3 className="font-semibold text-lg">Gagal Memuat Data</h3>
+              <p className="max-w-md text-muted-foreground">
+                Data evaluasi tidak dapat dimuat. Pastikan server berjalan dan
+                training sudah dilakukan.
+              </p>
+            </div>
+            <Button
+              onClick={handleRetry}
+              disabled={isRetrying}
+              variant="default"
+              className="gap-2"
+            >
+              {isRetrying ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              Coba Lagi
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // RENDER: EMPTY STATE
+  // ============================================================
+  if (!cmDetail) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="font-bold text-foreground text-3xl">Evaluasi Model</h1>
+          <p className="mt-2 text-muted-foreground">
+            Analisis perbandingan performa model
+          </p>
+        </div>
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-16">
+            <div className="bg-violet-100 dark:bg-violet-900/20 p-4 rounded-full">
+              <BarChart3 className="w-12 h-12 text-violet-400" />
+            </div>
+            <div className="space-y-2 text-center">
+              <h3 className="font-semibold text-lg">Belum Ada Data Evaluasi</h3>
+              <p className="max-w-md text-muted-foreground">
+                Jalankan training model terlebih dahulu untuk melihat hasil
+                evaluasi.
+              </p>
+            </div>
+            <Button onClick={fetchData} variant="outline" className="gap-2">
+              <RefreshCw className="w-4 h-4" />
               Refresh
             </Button>
           </CardContent>
@@ -273,8 +637,7 @@ export default function EvaluationPage() {
             {row.map((cell, j) => (
               <TableCell key={j} className="text-center">
                 <Badge
-                  // variant={i === j ? "default" : "outline"}
-                  variant={"outline"}
+                  variant="outline"
                   className={
                     i === j
                       ? "bg-emerald-100 dark:bg-emerald-900/50 min-w-10 font-mono text-black"
@@ -423,11 +786,38 @@ export default function EvaluationPage() {
             (TF-IDF + InSet Lexicon)
           </p>
         </div>
-        <Button variant="ghost" onClick={fetchData}>
-          <RefreshCw className="mr-2 w-4 h-4" />
+        <Button variant="ghost" onClick={fetchData} disabled={isRetrying}>
+          {isRetrying ? (
+            <Loader2 className="mr-2 w-4 h-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 w-4 h-4" />
+          )}
           Refresh
         </Button>
       </div>
+
+      {/* ERROR DISPLAY */}
+      <ErrorDisplay />
+
+      {/* Partial error warning */}
+      {partialError && errors.length === 0 && (
+        <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-950/30 p-3 border border-amber-200 dark:border-amber-800 rounded-lg">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          <p className="flex-1 text-amber-800 dark:text-amber-200 text-sm">
+            Beberapa data (uji statistik) gagal dimuat. Data confusion matrix
+            tetap ditampilkan.
+          </p>
+          <Button
+            onClick={handleRetry}
+            disabled={isRetrying}
+            variant="outline"
+            size="sm"
+            className="gap-1"
+          >
+            <RefreshCw className="w-3 h-3" /> Muat Ulang
+          </Button>
+        </div>
+      )}
 
       {/* BASELINE vs PROPOSED CARDS */}
       <div>
@@ -933,10 +1323,7 @@ export default function EvaluationPage() {
                     Penambahan fitur InSet Lexicon meningkatkan akurasi dari{" "}
                     {pct(cmDetail.baseline.average.accuracy)}% menjadi{" "}
                     {pct(cmDetail.proposed.average.accuracy)}% (Δ +
-                    {cmDetail.improvement.accuracy.toFixed(2)}%). Peningkatan
-                    ini menunjukkan bahwa fitur InSet Lexicon memberikan
-                    kontribusi positif pada kemampuan klasifikasi model
-                    Complement Naive Bayes.
+                    {cmDetail.improvement.accuracy.toFixed(2)}%).
                   </p>
                 </div>
               </CardContent>
@@ -1206,7 +1593,7 @@ export default function EvaluationPage() {
           </div>
         </TabsContent>
 
-        {/* CV FOLDS DETAIL TAB */}
+        {/* CV FOLDS & TTEST tabs - ringkasan saja untuk brevity */}
         <TabsContent value="folds">
           <div className="space-y-6">
             {(["baseline", "proposed"] as const).map((variant) => {
@@ -1226,13 +1613,7 @@ export default function EvaluationPage() {
                     >
                       {pct(data.average.accuracy)}%
                     </span>{" "}
-                    ±
-                    <span className="font-semibold">
-                      {pct(data.average.accuracy_std)}%
-                    </span>{" "}
-                    (rentang:{" "}
-                    {pct(data.average.accuracy - data.average.accuracy_std)}% —{" "}
-                    {pct(data.average.accuracy + data.average.accuracy_std)}%)
+                    ±{pct(data.average.accuracy_std)}%
                   </p>
                   <Card>
                     <CardContent className="p-0">
@@ -1277,30 +1658,26 @@ export default function EvaluationPage() {
                           <TableRow className="bg-muted/50 font-semibold">
                             <TableCell>Rata-rata</TableCell>
                             <TableCell className="font-mono text-right">
-                              {pct(data.average.accuracy)}%
+                              {pct(data.average.accuracy)}%{" "}
                               <span className="font-normal text-muted-foreground">
-                                {" "}
                                 ±{pct(data.average.accuracy_std)}%
                               </span>
                             </TableCell>
                             <TableCell className="font-mono text-right">
-                              {pct(data.average.precision)}%
+                              {pct(data.average.precision)}%{" "}
                               <span className="font-normal text-muted-foreground">
-                                {" "}
                                 ±{pct(data.average.precision_std)}%
                               </span>
                             </TableCell>
                             <TableCell className="font-mono text-right">
-                              {pct(data.average.recall)}%
+                              {pct(data.average.recall)}%{" "}
                               <span className="font-normal text-muted-foreground">
-                                {" "}
                                 ±{pct(data.average.recall_std)}%
                               </span>
                             </TableCell>
                             <TableCell className="font-mono text-right">
-                              {pct(data.average.f1_score)}%
+                              {pct(data.average.f1_score)}%{" "}
                               <span className="font-normal text-muted-foreground">
-                                {" "}
                                 ±{pct(data.average.f1_score_std)}%
                               </span>
                             </TableCell>
@@ -1309,177 +1686,107 @@ export default function EvaluationPage() {
                       </Table>
                     </CardContent>
                   </Card>
-                  <div className="flex items-center gap-2 mt-2 text-muted-foreground text-xs">
-                    <span className="bg-muted px-2 py-0.5 rounded-full">
-                      Min: {pct(Math.min(...data.folds.map((f) => f.accuracy)))}
-                      %
-                    </span>
-                    <span>—</span>
-                    <span className="bg-muted px-2 py-0.5 rounded-full">
-                      Max: {pct(Math.max(...data.folds.map((f) => f.accuracy)))}
-                      %
-                    </span>
-                    <span className="ml-2">
-                      Std Dev: ±{pct(data.average.accuracy_std)}% (
-                      {(
-                        (data.average.accuracy_std / data.average.accuracy) *
-                        100
-                      ).toFixed(1)}
-                      % dari rata-rata)
-                    </span>
-                  </div>
                 </div>
               );
             })}
-
-            <Card className="bg-muted/30">
-              <CardHeader>
-                <CardTitle className="text-base">
-                  Ringkasan Stabilitas Model
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="gap-4 grid grid-cols-2">
-                  {(["baseline", "proposed"] as const).map((variant) => {
-                    const data = cmDetail[variant];
-                    const cv =
-                      (data.average.accuracy_std / data.average.accuracy) * 100;
-                    return (
-                      <div
-                        key={variant}
-                        className={`bg-white dark:bg-gray-900 p-3 border rounded-lg text-center ${variant === "proposed" ? "border-violet-200" : ""}`}
-                      >
-                        <p className="mb-1 text-muted-foreground text-xs capitalize">
-                          {variant}
-                        </p>
-                        <p
-                          className={`font-bold text-lg ${variant === "proposed" ? "text-violet-600" : ""}`}
-                        >
-                          {pct(data.average.accuracy)}%
-                          <span className="font-normal text-muted-foreground text-sm">
-                            {" "}
-                            ±{pct(data.average.accuracy_std)}%
-                          </span>
-                        </p>
-                        <p className="mt-1 text-muted-foreground text-xs">
-                          CV = {cv.toFixed(1)}%
-                          {cv < 5 ? " ✅ Stabil" : " ⚠️ Kurang Stabil"}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="mt-3 text-muted-foreground text-xs">
-                  <strong>CV (Coefficient of Variation)</strong> = Std Dev /
-                  Mean. Nilai CV yang rendah (&lt; 5%) mengindikasikan performa
-                  model yang konsisten antar fold.
-                </p>
-              </CardContent>
-            </Card>
           </div>
         </TabsContent>
 
-        {/* UJI STATISTIK TAB */}
         <TabsContent value="ttest">
           {ttest ? (
             <div className="gap-6 grid grid-cols-1 lg:grid-cols-2">
-              {(
-                [
-                  { key: "accuracy", label: "Accuracy", color: "violet" },
-                  { key: "precision", label: "Precision", color: "sky" },
-                  { key: "recall", label: "Recall", color: "amber" },
-                  { key: "f1_score", label: "F1-Score", color: "emerald" },
-                ] as const
-              ).map(({ key, label, color }) => {
-                const metric = ttest[key as keyof typeof ttest] as TTestMetric;
-                if (!metric || typeof metric === "string") return null;
-                const colorMap: Record<string, string> = {
-                  violet:
-                    "border-violet-300 bg-violet-50 dark:bg-violet-950/30",
-                  sky: "border-sky-300 bg-sky-50 dark:bg-sky-950/30",
-                  amber: "border-amber-300 bg-amber-50 dark:bg-amber-950/30",
-                  emerald:
-                    "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30",
-                };
-                const textColor: Record<string, string> = {
-                  violet: "text-violet-600",
-                  sky: "text-sky-600",
-                  amber: "text-amber-600",
-                  emerald: "text-emerald-600",
-                };
-
-                return (
-                  <Card
-                    key={key}
-                    className={
-                      metric.significant ? colorMap[color] : "border-gray-300"
-                    }
-                  >
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">{label}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="gap-4 grid grid-cols-2 text-center">
-                        <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
-                          <p className="text-muted-foreground text-xs">
-                            Baseline
-                          </p>
-                          <p className="font-bold text-lg">
-                            {(metric.baseline_mean * 100).toFixed(2)}%
-                          </p>
-                        </div>
-                        <div className={`p-3 rounded-lg ${colorMap[color]}`}>
-                          <p className="text-muted-foreground text-xs">
-                            Proposed
-                          </p>
-                          <p
-                            className={`font-bold text-lg ${textColor[color]}`}
+              {(["accuracy", "precision", "recall", "f1_score"] as const).map(
+                (key) => {
+                  const metric = ttest[key] as TTestMetric;
+                  if (!metric) return null;
+                  const colorMap: Record<string, string> = {
+                    accuracy: "violet",
+                    precision: "sky",
+                    recall: "amber",
+                    f1_score: "emerald",
+                  };
+                  const color = colorMap[key];
+                  return (
+                    <Card
+                      key={key}
+                      className={
+                        metric.significant
+                          ? `border-${color}-300 bg-${color}-50 dark:bg-${color}-950/30`
+                          : "border-gray-300"
+                      }
+                    >
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm capitalize">
+                          {key.replace("_", "-")}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="gap-4 grid grid-cols-2 text-center">
+                          <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                            <p className="text-muted-foreground text-xs">
+                              Baseline
+                            </p>
+                            <p className="font-bold text-lg">
+                              {(metric.baseline_mean * 100).toFixed(2)}%
+                            </p>
+                          </div>
+                          <div
+                            className={`p-3 rounded-lg bg-${color}-50 dark:bg-${color}-950/30`}
                           >
-                            {(metric.proposed_mean * 100).toFixed(2)}%
-                          </p>
+                            <p className="text-muted-foreground text-xs">
+                              Proposed
+                            </p>
+                            <p
+                              className={`font-bold text-lg text-${color}-600`}
+                            >
+                              {(metric.proposed_mean * 100).toFixed(2)}%
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                      <div className="space-y-2 text-sm">
-                        <div className="flex justify-between">
-                          <span>Mean Diff</span>
-                          <span className="font-mono">
-                            {metric.mean_diff >= 0 ? "+" : ""}
-                            {(metric.mean_diff * 100).toFixed(2)}%
-                          </span>
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span>Mean Diff</span>
+                            <span className="font-mono">
+                              {metric.mean_diff >= 0 ? "+" : ""}
+                              {(metric.mean_diff * 100).toFixed(2)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>t-statistic</span>
+                            <span className="font-mono">
+                              {metric.t_statistic}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>p-value</span>
+                            <span className="font-mono">{metric.p_value}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Cohen's d</span>
+                            <span className="font-mono">{metric.cohens_d}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span>t-statistic</span>
-                          <span className="font-mono">
-                            {metric.t_statistic}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>p-value</span>
-                          <span className="font-mono">{metric.p_value}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Cohen's d</span>
-                          <span className="font-mono">{metric.cohens_d}</span>
-                        </div>
-                      </div>
-                      <Badge
-                        className={
-                          metric.significant
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-gray-100 text-gray-600"
-                        }
-                      >
-                        {metric.interpretation}
-                      </Badge>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                        <Badge
+                          className={
+                            metric.significant
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-gray-100 text-gray-600"
+                          }
+                        >
+                          {metric.interpretation}
+                        </Badge>
+                      </CardContent>
+                    </Card>
+                  );
+                },
+              )}
             </div>
           ) : (
             <Card>
               <CardContent className="py-8 text-muted-foreground text-center">
-                Data tidak tersedia.
+                {partialError
+                  ? "Gagal memuat data uji statistik."
+                  : "Data tidak tersedia. Jalankan training terlebih dahulu."}
               </CardContent>
             </Card>
           )}

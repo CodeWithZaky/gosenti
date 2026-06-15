@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -11,14 +12,16 @@ import {
   Minus,
   Newspaper,
   PieChart as PieChartIcon,
+  RefreshCw,
   Search,
   Target,
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
+  WifiOff,
   Zap,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -35,98 +38,414 @@ import {
   YAxis,
 } from "recharts";
 
+interface TrendDataItem {
+  date: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+}
+
+interface YearlyDataItem {
+  year: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+}
+
+interface PieDataItem {
+  name: string;
+  value: number;
+  color: string;
+}
+
+interface StatsData {
+  accuracy?: number;
+  f1_score?: number;
+  [key: string]: unknown;
+}
+
+interface ApiErrorResponse {
+  detail?: string;
+  message?: string;
+  error?: string;
+}
+
 export default function DashboardPage() {
-  const [monthlyData, setMonthlyData] = useState<any[]>([]);
-  const [yearlyData, setYearlyData] = useState<any[]>([]);
-  const [pieData, setPieData] = useState<any[]>([]);
+  const [monthlyData, setMonthlyData] = useState<TrendDataItem[]>([]);
+  const [yearlyData, setYearlyData] = useState<YearlyDataItem[]>([]);
+  const [pieData, setPieData] = useState<PieDataItem[]>([]);
   const [totals, setTotals] = useState({ pos: 0, neu: 0, neg: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [stats, setStats] = useState<any>(null);
+  const [errorType, setErrorType] = useState<
+    "network" | "server" | "data" | "timeout" | null
+  >(null);
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const COLORS = { pos: "#10b981", neu: "#94a3b8", neg: "#ef4444" };
+  const MAX_RETRIES = 3;
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [trendRes, statsRes] = await Promise.all([
-          fetch("http://localhost:8000/api/dashboard/trend"),
-          fetch("http://localhost:8000/api/stats"),
-        ]);
+  const getErrorMessage = (type: string | null): string => {
+    switch (type) {
+      case "network":
+        return "Gagal terhubung ke server. Periksa koneksi internet Anda dan pastikan server backend berjalan.";
+      case "timeout":
+        return "Koneksi ke server timeout. Server mungkin sedang sibuk atau tidak merespons. Silakan coba lagi.";
+      case "server":
+        return "Server mengalami kesalahan internal. Tim teknis telah diberitahu. Silakan coba beberapa saat lagi.";
+      case "data":
+        return "Data yang diterima dari server tidak valid. Format data mungkin telah berubah. Silakan muat ulang halaman.";
+      default:
+        return "Terjadi kesalahan yang tidak diketahui. Silakan coba lagi.";
+    }
+  };
 
-        const trendJson = await trendRes.json();
-        const statsJson = await statsRes.json();
+  const isValidTrendData = (data: unknown): data is TrendDataItem[] => {
+    if (!Array.isArray(data)) return false;
+    return data.every(
+      (item) =>
+        typeof item.date === "string" &&
+        typeof item.positive === "number" &&
+        typeof item.neutral === "number" &&
+        typeof item.negative === "number",
+    );
+  };
 
-        if (trendJson.status === "success") {
-          const data = trendJson.data;
-          setMonthlyData(data);
+  const fetchData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    setErrorType(null);
 
-          let totalPos = 0,
-            totalNeu = 0,
-            totalNeg = 0;
-          const yearMap: Record<string, any> = {};
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 detik timeout
 
-          data.forEach((item: any) => {
-            totalPos += item.positive;
-            totalNeu += item.neutral;
-            totalNeg += item.negative;
-            const year = item.date.split(" ")[1];
-            if (!yearMap[year]) {
-              yearMap[year] = { year, positive: 0, neutral: 0, negative: 0 };
-            }
-            yearMap[year].positive += item.positive;
-            yearMap[year].neutral += item.neutral;
-            yearMap[year].negative += item.negative;
-          });
+    try {
+      const [trendRes, statsRes] = await Promise.all([
+        fetch("http://localhost:8000/api/dashboard/trend", {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+          },
+        }),
+        fetch("http://localhost:8000/api/stats", {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+          },
+        }),
+      ]);
 
-          setTotals({ pos: totalPos, neu: totalNeu, neg: totalNeg });
-          setPieData([
-            { name: "Positif", value: totalPos, color: COLORS.pos },
-            { name: "Neutral", value: totalNeu, color: COLORS.neu },
-            { name: "Negatif", value: totalNeg, color: COLORS.neg },
-          ]);
+      clearTimeout(timeoutId);
 
-          setYearlyData(
-            Object.values(yearMap).sort((a: any, b: any) =>
-              a.year.localeCompare(b.year),
-            ),
+      // Handle network errors
+      if (!trendRes.ok || !statsRes.ok) {
+        const statusCode = !trendRes.ok ? trendRes.status : statsRes.status;
+
+        if (statusCode >= 500) {
+          setErrorType("server");
+          setError(
+            `Server error (${statusCode}). ${getErrorMessage("server")}`,
           );
+        } else if (statusCode === 404) {
+          setErrorType("data");
+          setError(
+            `Endpoint tidak ditemukan (404). Pastikan API routes tersedia.`,
+          );
+        } else if (statusCode === 429) {
+          setErrorType("server");
+          setError(
+            "Terlalu banyak permintaan (429). Silakan tunggu beberapa saat.",
+          );
+        } else {
+          setErrorType("server");
+          setError(`Server merespons dengan status ${statusCode}.`);
         }
-
-        if (statsJson) {
-          setStats(statsJson);
-        }
-      } catch (err) {
-        console.error("Gagal mengambil data", err);
-        setError("Gagal terhubung ke server");
-      } finally {
-        setIsLoading(false);
+        return;
       }
-    };
 
-    fetchData();
+      // Parse JSON dengan error handling
+      let trendJson: unknown;
+      let statsJson: unknown;
+
+      try {
+        trendJson = await trendRes.json();
+      } catch {
+        setErrorType("data");
+        setError("Gagal memproses data tren. Respons tidak valid.");
+        return;
+      }
+
+      try {
+        statsJson = await statsRes.json();
+      } catch {
+        // Stats error tidak kritis, kita bisa melanjutkan tanpa stats
+        console.warn("Gagal memproses data stats, melanjutkan tanpa stats");
+        statsJson = null;
+      }
+
+      // Validasi struktur data tren
+      if (
+        !trendJson ||
+        typeof trendJson !== "object" ||
+        (trendJson as Record<string, unknown>).status !== "success" ||
+        !(trendJson as Record<string, unknown>).data
+      ) {
+        setErrorType("data");
+        setError("Format data tren tidak sesuai yang diharapkan.");
+        return;
+      }
+
+      const rawData = (trendJson as { data: unknown }).data;
+
+      if (!isValidTrendData(rawData)) {
+        setErrorType("data");
+        setError(
+          "Struktur data tren tidak valid. Field yang diperlukan tidak ditemukan.",
+        );
+        return;
+      }
+
+      const data: TrendDataItem[] = rawData;
+
+      // Jika data kosong
+      if (data.length === 0) {
+        setErrorType("data");
+        setError(
+          "Data tren tersedia tetapi kosong. Belum ada data untuk periode ini.",
+        );
+        return;
+      }
+
+      // Proses data yang valid
+      setMonthlyData(data);
+
+      let totalPos = 0,
+        totalNeu = 0,
+        totalNeg = 0;
+      const yearMap: Record<string, YearlyDataItem> = {};
+
+      data.forEach((item) => {
+        totalPos += item.positive;
+        totalNeu += item.neutral;
+        totalNeg += item.negative;
+        const year = item.date.split(" ")[1];
+        if (!yearMap[year]) {
+          yearMap[year] = { year, positive: 0, neutral: 0, negative: 0 };
+        }
+        yearMap[year].positive += item.positive;
+        yearMap[year].neutral += item.neutral;
+        yearMap[year].negative += item.negative;
+      });
+
+      setTotals({ pos: totalPos, neu: totalNeu, neg: totalNeg });
+      setPieData([
+        { name: "Positif", value: totalPos, color: COLORS.pos },
+        { name: "Neutral", value: totalNeu, color: COLORS.neu },
+        { name: "Negatif", value: totalNeg, color: COLORS.neg },
+      ]);
+
+      setYearlyData(
+        Object.values(yearMap).sort((a, b) => a.year.localeCompare(b.year)),
+      );
+
+      if (statsJson && typeof statsJson === "object") {
+        setStats(statsJson as StatsData);
+      }
+
+      setRetryCount(0); // Reset retry count on success
+    } catch (err: unknown) {
+      clearTimeout(timeoutId);
+
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setErrorType("timeout");
+        setError(getErrorMessage("timeout"));
+      } else if (
+        err instanceof TypeError &&
+        err.message === "Failed to fetch"
+      ) {
+        setErrorType("network");
+        setError(getErrorMessage("network"));
+      } else {
+        setErrorType("network");
+        setError(
+          `Gagal terhubung ke server: ${
+            err instanceof Error ? err.message : "Kesalahan tidak diketahui"
+          }`,
+        );
+      }
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleRetry = () => {
+    if (retryCount < MAX_RETRIES) {
+      setRetryCount((prev) => prev + 1);
+      fetchData();
+    }
+  };
+
+  // ============================================================
+  // RENDER: LOADING STATE
+  // ============================================================
   if (isLoading) return <DashboardSkeleton />;
 
+  // ============================================================
+  // RENDER: ERROR STATE
+  // ============================================================
   if (error) {
     return (
       <div className="flex justify-center items-center p-8 min-h-screen">
-        <Card className="w-full max-w-md">
+        <Card className="shadow-lg border-destructive/30 w-full max-w-lg">
           <CardHeader>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-destructive" />
-              <CardTitle>Gagal Memuat Data</CardTitle>
+            <div className="flex items-center gap-3">
+              <div className="bg-destructive/10 p-2 rounded-full">
+                {errorType === "network" || errorType === "timeout" ? (
+                  <WifiOff className="w-5 h-5 text-destructive" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-destructive" />
+                )}
+              </div>
+              <div>
+                <CardTitle className="text-lg">
+                  {errorType === "network"
+                    ? "Koneksi Gagal"
+                    : errorType === "timeout"
+                      ? "Koneksi Timeout"
+                      : errorType === "server"
+                        ? "Server Error"
+                        : errorType === "data"
+                          ? "Data Tidak Valid"
+                          : "Gagal Memuat Data"}
+                </CardTitle>
+                <p className="mt-1 text-muted-foreground text-sm">
+                  {errorType === "network" || errorType === "timeout"
+                    ? "Tidak dapat terhubung ke server backend"
+                    : "Terjadi kesalahan saat memproses data"}
+                </p>
+              </div>
             </div>
           </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">{error}</p>
+          <CardContent className="space-y-4">
+            <div className="bg-muted/50 p-4 rounded-lg">
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                {error}
+              </p>
+            </div>
+
+            <div className="bg-amber-50 dark:bg-amber-950/30 p-4 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <p className="font-medium text-amber-800 dark:text-amber-200 text-sm">
+                Saran Pemecahan Masalah:
+              </p>
+              <ul className="space-y-1 mt-2 text-amber-700 dark:text-amber-300 text-sm list-disc list-inside">
+                {errorType === "network" && (
+                  <>
+                    <li>Pastikan server backend berjalan di port 8000</li>
+                    <li>Periksa apakah URL server sudah benar</li>
+                    <li>
+                      Coba akses http://localhost:8000/docs untuk verifikasi
+                    </li>
+                  </>
+                )}
+                {errorType === "timeout" && (
+                  <>
+                    <li>Server mungkin sedang memproses data besar</li>
+                    <li>Coba tunggu beberapa saat dan muat ulang</li>
+                    <li>Periksa log server untuk kemungkinan deadlock</li>
+                  </>
+                )}
+                {errorType === "server" && (
+                  <>
+                    <li>Periksa log server untuk detail error</li>
+                    <li>Pastikan database terkoneksi dengan benar</li>
+                    <li>Restart server jika diperlukan</li>
+                  </>
+                )}
+                {errorType === "data" && (
+                  <>
+                    <li>Periksa apakah struktur API response telah berubah</li>
+                    <li>Pastikan endpoint mengembalikan format yang benar</li>
+                    <li>Hubungi pengembang untuk update skema data</li>
+                  </>
+                )}
+              </ul>
+            </div>
+
+            <div className="flex justify-between items-center">
+              <p className="text-muted-foreground text-xs">
+                Percobaan: {retryCount}/{MAX_RETRIES}
+              </p>
+              <Button
+                onClick={handleRetry}
+                disabled={retryCount >= MAX_RETRIES}
+                variant="default"
+                size="sm"
+                className="gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                {retryCount >= MAX_RETRIES
+                  ? "Batas Percobaan Tercapai"
+                  : "Coba Lagi"}
+              </Button>
+            </div>
+
+            {retryCount >= MAX_RETRIES && (
+              <div className="bg-destructive/10 p-3 border border-destructive/30 rounded-lg">
+                <p className="font-medium text-destructive text-sm">
+                  Batas maksimum percobaan ({MAX_RETRIES}x) telah tercapai.
+                </p>
+                <p className="mt-1 text-muted-foreground text-xs">
+                  Silakan periksa koneksi atau konfigurasi server, lalu muat
+                  ulang halaman.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
     );
   }
 
+  // ============================================================
+  // RENDER: EMPTY STATE
+  // ============================================================
+  if (monthlyData.length === 0) {
+    return (
+      <div className="flex justify-center items-center p-8 min-h-screen">
+        <Card className="shadow-lg w-full max-w-md text-center">
+          <CardHeader>
+            <div className="bg-muted mx-auto mb-4 p-4 rounded-full w-fit">
+              <BarChart3 className="w-8 h-8 text-muted-foreground" />
+            </div>
+            <CardTitle>Tidak Ada Data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              Belum ada data sentimen yang tersedia. Silakan lakukan scraping
+              data terlebih dahulu atau periksa koneksi database.
+            </p>
+            <Button
+              onClick={handleRetry}
+              variant="outline"
+              className="gap-2 mt-4"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Muat Ulang
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // RENDER: MAIN CONTENT
+  // ============================================================
   const totalAll = totals.pos + totals.neu + totals.neg;
   const positivePercentage =
     totalAll > 0 ? ((totals.pos / totalAll) * 100).toFixed(1) : "0";
@@ -144,9 +463,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 min-h-screen">
-      {/* ============================================================ */}
       {/* HEADER */}
-      {/* ============================================================ */}
       <div>
         <h1 className="font-bold text-foreground text-3xl">
           Analisis Tren Sentimen
@@ -156,9 +473,7 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* ============================================================ */}
       {/* ABSTRAK / RINGKASAN PENELITIAN */}
-      {/* ============================================================ */}
       <Card className="bg-linear-to-br from-violet-50 dark:from-violet-950/20 via-white dark:via-gray-950 to-sky-50 dark:to-sky-950/20 shadow-lg border-2 border-violet-100 dark:border-violet-900/50">
         <CardContent className="p-6">
           <div className="gap-6 grid grid-cols-1 lg:grid-cols-3">
@@ -312,9 +627,7 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-      {/* ============================================================ */}
       {/* SUMMARY CARDS */}
-      {/* ============================================================ */}
       <div className="gap-4 grid grid-cols-2 lg:grid-cols-4">
         <Card className="hover:shadow-md border transition-shadow">
           <CardHeader className="flex flex-row justify-between items-center space-y-0 pb-2">
@@ -400,9 +713,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ============================================================ */}
       {/* AREA CHART - TREN BULANAN */}
-      {/* ============================================================ */}
       <Card className="shadow-md border">
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -511,9 +822,7 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-      {/* ============================================================ */}
       {/* BAR CHART + PIE CHART */}
-      {/* ============================================================ */}
       <div className="gap-6 grid grid-cols-1 lg:grid-cols-3">
         {/* Bar Chart - Tahunan */}
         <Card className="lg:col-span-2 shadow-md border">

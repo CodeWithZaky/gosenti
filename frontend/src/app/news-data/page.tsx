@@ -21,15 +21,23 @@ import {
 } from "@/components/ui/table";
 import { useLoadMore } from "@/hooks/useLoadMore";
 import {
+  AlertTriangle,
+  Bug,
   Calendar,
   Clock,
   ExternalLink,
   Globe,
   Info,
+  Loader2,
   Newspaper,
+  RefreshCw,
+  ServerCrash,
   TrendingUp,
+  WifiOff,
+  XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 interface NewsItem {
   guid: string;
@@ -40,7 +48,200 @@ interface NewsItem {
   scraped_at: string | null;
 }
 
+// Error detail interface
+interface ErrorDetail {
+  type: "network" | "server" | "data" | "timeout" | "unknown";
+  message: string;
+  statusCode?: number;
+  endpoint?: string;
+  timestamp: Date;
+  rawError?: string;
+}
+
 export default function NewsDataPage() {
+  const [selectedItem, setSelectedItem] = useState<NewsItem | null>(null);
+
+  // Error states
+  const [errors, setErrors] = useState<ErrorDetail[]>([]);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 3;
+  const mountedRef = useRef(true);
+  const initialLoadDoneRef = useRef(false);
+
+  // Helper untuk menambah error
+  const addError = useCallback((error: ErrorDetail) => {
+    setErrors((prev) => [...prev, error]);
+  }, []);
+
+  // Helper untuk clear errors
+  const clearErrors = useCallback(() => {
+    setErrors([]);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Fungsi fetch data dengan error handling
+  const fetchNewsData = useCallback(
+    async (page: number, pageSize: number) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const endpoint = `http://localhost:8000/api/news?page=${page}&page_size=${pageSize}`;
+
+      try {
+        const res = await fetch(endpoint, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+          },
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const statusCode = res.status;
+          let serverMessage = "";
+
+          try {
+            const errorData = await res.json();
+            serverMessage =
+              errorData.message ||
+              errorData.detail ||
+              JSON.stringify(errorData);
+          } catch {
+            serverMessage = `HTTP ${statusCode} - ${res.statusText}`;
+          }
+
+          addError({
+            type: statusCode >= 500 ? "server" : "data",
+            message: `Server error (${statusCode})`,
+            statusCode,
+            endpoint,
+            timestamp: new Date(),
+            rawError: serverMessage,
+          });
+
+          return {
+            items: [],
+            pagination: {
+              page: 1,
+              page_size: pageSize,
+              total: 0,
+              total_pages: 0,
+            },
+          };
+        }
+
+        const result = await res.json();
+
+        // Validasi struktur data
+        if (!result || typeof result !== "object") {
+          addError({
+            type: "data",
+            message: "Respons server tidak valid (bukan object JSON)",
+            endpoint,
+            timestamp: new Date(),
+            rawError: typeof result,
+          });
+          return {
+            items: [],
+            pagination: {
+              page: 1,
+              page_size: pageSize,
+              total: 0,
+              total_pages: 0,
+            },
+          };
+        }
+
+        if (!result.items || !Array.isArray(result.items)) {
+          addError({
+            type: "data",
+            message:
+              "Format data tidak sesuai: field 'items' tidak ditemukan atau bukan array",
+            endpoint,
+            timestamp: new Date(),
+            rawError: JSON.stringify(Object.keys(result)),
+          });
+          return {
+            items: [],
+            pagination: {
+              page: 1,
+              page_size: pageSize,
+              total: 0,
+              total_pages: 0,
+            },
+          };
+        }
+
+        // Clear errors on success (hanya untuk load pertama)
+        if (page === 1) {
+          clearErrors();
+        }
+        retryCountRef.current = 0;
+
+        return { items: result.items, pagination: result.pagination };
+      } catch (err: unknown) {
+        clearTimeout(timeoutId);
+
+        let errorDetail: ErrorDetail;
+
+        if (err instanceof DOMException && err.name === "AbortError") {
+          errorDetail = {
+            type: "timeout",
+            message:
+              "Request timeout (15 detik) - Server tidak merespons tepat waktu",
+            endpoint,
+            timestamp: new Date(),
+            rawError: err.message,
+          };
+        } else if (
+          err instanceof TypeError &&
+          err.message === "Failed to fetch"
+        ) {
+          errorDetail = {
+            type: "network",
+            message:
+              "Gagal terhubung ke server - Server mungkin tidak berjalan atau CORS bermasalah",
+            endpoint,
+            timestamp: new Date(),
+            rawError: `${err.message}. Pastikan server berjalan di http://localhost:8000`,
+          };
+        } else {
+          errorDetail = {
+            type: "unknown",
+            message:
+              err instanceof Error ? err.message : "Kesalahan tidak diketahui",
+            endpoint,
+            timestamp: new Date(),
+            rawError: err instanceof Error ? err.stack : String(err),
+          };
+        }
+
+        addError(errorDetail);
+
+        return {
+          items: [],
+          pagination: {
+            page: 1,
+            page_size: pageSize,
+            total: 0,
+            total_pages: 0,
+          },
+        };
+      }
+    },
+    [addError, clearErrors],
+  );
+
   const {
     items: data,
     loading,
@@ -49,34 +250,231 @@ export default function NewsDataPage() {
     total,
     pagination,
     loadMore,
-  } = useLoadMore<NewsItem>(async (page, pageSize) => {
-    const res = await fetch(
-      `http://localhost:8000/api/news?page=${page}&page_size=${pageSize}`,
-    );
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const result = await res.json();
-    return { items: result.items, pagination: result.pagination };
-  });
+    reset,
+  } = useLoadMore<NewsItem>(fetchNewsData);
 
-  const [selectedItem, setSelectedItem] = useState<NewsItem | null>(null);
-
+  // Initial load
   useEffect(() => {
-    loadMore();
-  }, []);
+    if (initialLoadDoneRef.current) return;
+    initialLoadDoneRef.current = true;
 
+    const init = async () => {
+      try {
+        await loadMore();
+      } catch {
+        // Error sudah di-handle
+      }
+    };
+
+    init();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRetry = async () => {
+    if (retryCountRef.current >= MAX_RETRIES) {
+      toast.error("Batas percobaan tercapai", {
+        description: `Gagal setelah ${MAX_RETRIES}x percobaan.`,
+      });
+      return;
+    }
+
+    setIsRetrying(true);
+    retryCountRef.current++;
+    clearErrors();
+
+    try {
+      reset();
+      await loadMore();
+    } catch {
+      // Error sudah di-handle
+    } finally {
+      if (mountedRef.current) {
+        setIsRetrying(false);
+      }
+    }
+  };
+
+  // Hitung statistik
+  const portals = useMemo(
+    () => [...new Set(data.map((item) => item.portal_name))],
+    [data],
+  );
+
+  const tanggalTerbaru = useMemo(() => {
+    if (data.length === 0) return null;
+    return data.reduce((latest, item) => {
+      if (!item.published_at) return latest;
+      const d = new Date(item.published_at);
+      return d > latest ? d : latest;
+    }, new Date(0));
+  }, [data]);
+
+  // Komponen Error Display
+  const ErrorDisplay = () => {
+    if (errors.length === 0) return null;
+
+    const latestError = errors[errors.length - 1];
+    const hasNetworkError = errors.some((e) => e.type === "network");
+    const hasServerError = errors.some((e) => e.type === "server");
+    const hasTimeout = errors.some((e) => e.type === "timeout");
+
+    const getErrorIcon = () => {
+      if (hasNetworkError) return <WifiOff className="w-5 h-5" />;
+      if (hasTimeout) return <AlertTriangle className="w-5 h-5" />;
+      if (hasServerError) return <ServerCrash className="w-5 h-5" />;
+      return <Bug className="w-5 h-5" />;
+    };
+
+    const getErrorColor = () => {
+      if (hasNetworkError)
+        return "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/30";
+      if (hasTimeout)
+        return "border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/30";
+      if (hasServerError)
+        return "border-orange-400 dark:border-orange-600 bg-orange-50 dark:bg-orange-950/30";
+      return "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-950/30";
+    };
+
+    const getErrorTitle = () => {
+      if (hasNetworkError) return "Koneksi Gagal";
+      if (hasTimeout) return "Request Timeout";
+      if (hasServerError) return "Server Error";
+      return "Error";
+    };
+
+    return (
+      <Card className={`border-2 ${getErrorColor()} shadow-lg`}>
+        <CardContent className="space-y-3 p-4">
+          {/* Header Error */}
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex items-center gap-2">
+              <div className="bg-white dark:bg-gray-800 p-1.5 rounded-full">
+                {getErrorIcon()}
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">{getErrorTitle()}</h3>
+                <p className="text-muted-foreground text-xs">
+                  {errors.length} error terjadi • Terakhir:{" "}
+                  {latestError.timestamp.toLocaleTimeString()}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowErrorDetails(!showErrorDetails)}
+                className="h-7 text-xs"
+              >
+                {showErrorDetails ? "Sembunyikan" : "Detail"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearErrors}
+                className="h-7 text-xs"
+              >
+                <XCircle className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Pesan Error Utama */}
+          <div className="bg-white dark:bg-gray-900 p-3 border rounded-lg">
+            <div className="flex items-start gap-2">
+              <Info className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0" />
+              <div>
+                <p className="font-medium text-sm">{latestError.message}</p>
+                {latestError.endpoint && (
+                  <p className="mt-1 font-mono text-muted-foreground text-xs">
+                    Endpoint: {latestError.endpoint}
+                  </p>
+                )}
+                {latestError.statusCode && (
+                  <p className="text-muted-foreground text-xs">
+                    Status: {latestError.statusCode}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Detail Error (Collapsible) */}
+          {showErrorDetails && (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              <p className="font-medium text-muted-foreground text-xs">
+                Semua Error ({errors.length}):
+              </p>
+              {errors.map((err, i) => (
+                <div
+                  key={i}
+                  className="space-y-1 bg-white dark:bg-gray-900 p-2.5 border rounded-lg text-xs"
+                >
+                  <div className="flex justify-between items-center">
+                    <Badge
+                      variant="outline"
+                      className={
+                        err.type === "network"
+                          ? "border-red-300 text-red-600"
+                          : err.type === "timeout"
+                            ? "border-amber-300 text-amber-600"
+                            : err.type === "server"
+                              ? "border-orange-300 text-orange-600"
+                              : "border-yellow-300 text-yellow-600"
+                      }
+                    >
+                      {err.type.toUpperCase()}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {err.timestamp.toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="font-medium">{err.message}</p>
+                  {err.endpoint && (
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      {err.endpoint}
+                    </p>
+                  )}
+                  {err.rawError && (
+                    <div className="bg-muted/50 p-2 rounded font-mono text-[10px] break-all whitespace-pre-wrap">
+                      {err.rawError}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Tombol Aksi */}
+          <div className="flex justify-between items-center pt-1">
+            <p className="text-muted-foreground text-xs">
+              Retry: {retryCountRef.current}/{MAX_RETRIES}
+            </p>
+            <Button
+              onClick={handleRetry}
+              disabled={isRetrying || retryCountRef.current >= MAX_RETRIES}
+              size="sm"
+              variant="default"
+              className="gap-1"
+            >
+              {isRetrying ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3 h-3" />
+              )}
+              {retryCountRef.current >= MAX_RETRIES
+                ? "Batas Tercapai"
+                : "Coba Lagi"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // ============================================================
+  // RENDER: LOADING STATE
+  // ============================================================
   if (initialLoading) return <LoadingSkeleton />;
-
-  const portals = [...new Set(data.map((item) => item.portal_name))];
-
-  // Hitung statistik tambahan
-  const tanggalTerbaru =
-    data.length > 0
-      ? data.reduce((latest, item) => {
-          if (!item.published_at) return latest;
-          const d = new Date(item.published_at);
-          return d > latest ? d : latest;
-        }, new Date(0))
-      : null;
 
   return (
     <div className="space-y-6">
@@ -96,6 +494,9 @@ export default function NewsDataPage() {
           </Badge>
         </div>
       </div>
+
+      {/* ERROR DISPLAY - Ditampilkan di konten */}
+      <ErrorDisplay />
 
       {/* Stats Cards - 4 Kolom */}
       <div className="gap-4 grid grid-cols-2 lg:grid-cols-4">
@@ -150,7 +551,7 @@ export default function NewsDataPage() {
                   Data Terbaru
                 </p>
                 <p className="font-bold text-foreground text-lg leading-tight">
-                  {tanggalTerbaru
+                  {tanggalTerbaru && tanggalTerbaru.getTime() > 0
                     ? tanggalTerbaru.toLocaleDateString("id-ID", {
                         day: "numeric",
                         month: "short",
@@ -214,14 +615,19 @@ export default function NewsDataPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.length === 0 ? (
+                {data.length === 0 && !loading ? (
                   <TableRow>
                     <TableCell colSpan={5} className="py-12 text-center">
-                      <div className="flex flex-col items-center gap-2">
+                      <div className="flex flex-col items-center gap-3">
                         <Newspaper className="w-12 h-12 text-muted-foreground/30" />
                         <p className="text-muted-foreground">
                           Belum ada data berita
                         </p>
+                        {errors.length === 0 && (
+                          <p className="text-muted-foreground text-xs">
+                            Jalankan scraping untuk mengumpulkan data berita
+                          </p>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -437,13 +843,15 @@ export default function NewsDataPage() {
         </DialogContent>
       </Dialog>
 
-      <LoadMoreButton
-        onClick={loadMore}
-        loading={loading}
-        hasMore={hasMore}
-        currentCount={data.length}
-        totalCount={total}
-      />
+      {data.length > 0 && (
+        <LoadMoreButton
+          onClick={loadMore}
+          loading={loading}
+          hasMore={hasMore}
+          currentCount={data.length}
+          totalCount={total}
+        />
+      )}
     </div>
   );
 }
