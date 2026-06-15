@@ -811,7 +811,7 @@ export default function TfIdfPage() {
 
         {/* Stat Cards */}
         <div className="gap-3 grid grid-cols-2 lg:grid-cols-5">
-          <Card className="hover:shadow-md transition-shadow">
+          <Card className="hover:shadow-md border transition-shadow">
             <CardContent className="p-4">
               <div className="flex justify-between items-start">
                 <div className="space-y-0.5 min-w-0">
@@ -831,7 +831,7 @@ export default function TfIdfPage() {
               </div>
             </CardContent>
           </Card>
-          <Card className="hover:shadow-md transition-shadow">
+          <Card className="hover:shadow-md border transition-shadow">
             <CardContent className="p-4">
               <div className="flex justify-between items-start">
                 <div className="space-y-0.5 min-w-0">
@@ -861,7 +861,7 @@ export default function TfIdfPage() {
               </div>
             </CardContent>
           </Card>
-          <Card className="hover:shadow-md transition-shadow">
+          <Card className="hover:shadow-md border transition-shadow">
             <CardContent className="p-4">
               <div className="flex justify-between items-start">
                 <div className="space-y-0.5 min-w-0">
@@ -893,7 +893,7 @@ export default function TfIdfPage() {
               </div>
             </CardContent>
           </Card>
-          <Card className="hover:shadow-md transition-shadow">
+          <Card className="hover:shadow-md border transition-shadow">
             <CardContent className="p-4">
               <div className="flex justify-between items-start">
                 <div className="space-y-0.5 min-w-0">
@@ -913,7 +913,7 @@ export default function TfIdfPage() {
               </div>
             </CardContent>
           </Card>
-          <Card className="hover:shadow-md transition-shadow">
+          <Card className="hover:shadow-md border transition-shadow">
             <CardContent className="p-4">
               <div className="flex justify-between items-start">
                 <div className="space-y-0.5 min-w-0">

@@ -657,7 +657,7 @@ export default function PreprocessPage() {
 
       {/* Stats Cards */}
       <div className="gap-4 grid grid-cols-2 lg:grid-cols-4">
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -675,7 +675,7 @@ export default function PreprocessPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -698,7 +698,7 @@ export default function PreprocessPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -721,7 +721,7 @@ export default function PreprocessPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">

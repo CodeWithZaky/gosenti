@@ -501,7 +501,7 @@ export default function NewsDataPage() {
       {/* Stats Cards - 4 Kolom */}
       <div className="gap-4 grid grid-cols-2 lg:grid-cols-4">
         {/* Total Data */}
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -523,7 +523,7 @@ export default function NewsDataPage() {
         </Card>
 
         {/* Portal */}
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -543,7 +543,7 @@ export default function NewsDataPage() {
         </Card>
 
         {/* Data Terbaru */}
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
@@ -571,7 +571,7 @@ export default function NewsDataPage() {
         </Card>
 
         {/* Ditampilkan */}
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md border transition-shadow">
           <CardContent className="p-5">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
