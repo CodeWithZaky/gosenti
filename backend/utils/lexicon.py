@@ -1,8 +1,4 @@
-"""
-Utilitas untuk membaca file lexicon SentiStrength.
-Semua fungsi di sini melakukan lazy loading agar tidak membaca file
-berulang kali di setiap request.
-"""
+# utils/lexicon.py
 
 import os
 from functools import lru_cache
