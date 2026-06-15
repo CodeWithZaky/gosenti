@@ -9,5 +9,5 @@ wheels/
 # Virtual environments
 .venv
 
-backend/models/*
-!backend/models/README.md
+models/*
+!models/README.md
