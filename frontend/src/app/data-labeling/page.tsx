@@ -34,12 +34,30 @@ import {
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+interface WordDetail {
+  word: string;
+  score: number;
+  type: string;
+}
+
+interface WordDetailData {
+  guid: string;
+  clean_title: string;
+  positive_words: WordDetail[];
+  negative_words: WordDetail[];
+}
+
 interface SentiStrengthItem {
   guid: string;
   clean_title: string;
   label: string;
   pos: number;
   neg: number;
+  word_summary?: {
+    positive_count: number;
+    negative_count: number;
+    has_details: boolean;
+  };
 }
 
 interface SentiStrengthStats {
@@ -56,6 +74,9 @@ export default function SentiStrengthPage() {
   const [selectedItem, setSelectedItem] = useState<SentiStrengthItem | null>(
     null,
   );
+  const [wordData, setWordData] = useState<WordDetailData | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
   const [stats, setStats] = useState<SentiStrengthStats>({
     total: 0,
     positive: 0,
@@ -95,6 +116,28 @@ export default function SentiStrengthPage() {
     }
   };
 
+  const fetchWordDetails = async (guid: string) => {
+    setIsLoadingDetail(true);
+    setWordData(null);
+
+    try {
+      const res = await fetch(
+        `http://localhost:8000/api/data/sentistrength/${guid}/words`,
+      );
+      if (res.ok) {
+        const result = await res.json();
+        if (result.status === "success") {
+          setWordData(result.data);
+        }
+      }
+    } catch (err) {
+      console.error("Gagal mengambil detail kata:", err);
+      toast.error("Gagal mengambil detail kata");
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  };
+
   useEffect(() => {
     loadMore();
     fetchStats();
@@ -130,6 +173,11 @@ export default function SentiStrengthPage() {
     } finally {
       setIsRunning(false);
     }
+  };
+
+  const handleOpenDetail = (item: SentiStrengthItem) => {
+    setSelectedItem(item);
+    fetchWordDetails(item.guid);
   };
 
   const getLabelBadge = (label: string) => {
@@ -394,7 +442,7 @@ export default function SentiStrengthPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => setSelectedItem(item)}
+                          onClick={() => handleOpenDetail(item)}
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
@@ -418,25 +466,41 @@ export default function SentiStrengthPage() {
         />
       )}
 
-      <Dialog open={!!selectedItem} onOpenChange={() => setSelectedItem(null)}>
+      {/* Dialog Detail */}
+      <Dialog
+        open={!!selectedItem}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedItem(null);
+            setWordData(null);
+          }
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Detail SentiStrength</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              Detail SentiStrength
+              {selectedItem && getLabelBadge(selectedItem.label)}
+            </DialogTitle>
           </DialogHeader>
+
           {selectedItem && (
             <div className="space-y-4 mt-4">
+              {/* Teks */}
               <div className="bg-muted/50 p-4 border rounded-lg">
-                <p className="mb-2 font-medium text-muted-foreground text-xs">
+                <p className="mb-2 font-medium text-muted-foreground text-xs uppercase tracking-wider">
                   Teks Bersih
                 </p>
                 <p className="text-foreground">{selectedItem.clean_title}</p>
               </div>
+
+              {/* Skor */}
               <div className="gap-4 grid grid-cols-3">
                 <div className="bg-emerald-50 dark:bg-emerald-950/30 p-4 border border-emerald-100 dark:border-emerald-800 rounded-lg text-center">
-                  <p className="mb-1 font-medium text-emerald-600 text-xs">
+                  <p className="mb-1 font-medium text-emerald-600 dark:text-emerald-400 text-xs">
                     Skor Positif
                   </p>
-                  <p className="font-bold text-emerald-600 text-2xl">
+                  <p className="font-bold text-emerald-600 dark:text-emerald-400 text-2xl">
                     +{selectedItem.pos}
                   </p>
                 </div>
@@ -449,16 +513,85 @@ export default function SentiStrengthPage() {
                   </div>
                 </div>
                 <div className="bg-red-50 dark:bg-red-950/30 p-4 border border-red-100 dark:border-red-800 rounded-lg text-center">
-                  <p className="mb-1 font-medium text-red-600 text-xs">
+                  <p className="mb-1 font-medium text-red-600 dark:text-red-400 text-xs">
                     Skor Negatif
                   </p>
-                  <p className="font-bold text-red-600 text-2xl">
+                  <p className="font-bold text-red-600 dark:text-red-400 text-2xl">
                     {selectedItem.neg}
                   </p>
                 </div>
               </div>
-              <div className="text-center">
-                <Badge variant="secondary" className="text-xs">
+
+              {/* Loading */}
+              {isLoadingDetail && (
+                <div className="flex justify-center items-center py-8">
+                  <Loader2 className="w-6 h-6 text-muted-foreground animate-spin" />
+                </div>
+              )}
+
+              {/* Kata Positif */}
+              {!isLoadingDetail &&
+                wordData &&
+                wordData.positive_words.length > 0 && (
+                  <div>
+                    <p className="mb-2 font-medium text-emerald-700 dark:text-emerald-400 text-sm">
+                      Kata Positif ({wordData.positive_words.length})
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {wordData.positive_words.map((word, idx) => (
+                        <Badge
+                          key={idx}
+                          variant="outline"
+                          className="bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400"
+                        >
+                          {word.word}
+                          <span className="opacity-75 ml-1.5 font-mono text-xs">
+                            +{word.score}
+                          </span>
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              {/* Kata Negatif */}
+              {!isLoadingDetail &&
+                wordData &&
+                wordData.negative_words.length > 0 && (
+                  <div>
+                    <p className="mb-2 font-medium text-red-700 dark:text-red-400 text-sm">
+                      Kata Negatif ({wordData.negative_words.length})
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {wordData.negative_words.map((word, idx) => (
+                        <Badge
+                          key={idx}
+                          variant="outline"
+                          className="bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"
+                        >
+                          {word.word}
+                          <span className="opacity-75 ml-1.5 font-mono text-xs">
+                            {word.score}
+                          </span>
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              {/* Tidak ada kata */}
+              {!isLoadingDetail &&
+                wordData &&
+                wordData.positive_words.length === 0 &&
+                wordData.negative_words.length === 0 && (
+                  <div className="py-4 text-muted-foreground text-sm text-center">
+                    Tidak ada kata sentimen yang terdeteksi
+                  </div>
+                )}
+
+              {/* GUID */}
+              <div className="pt-2 text-center">
+                <Badge variant="secondary" className="font-mono text-xs">
                   GUID: {selectedItem.guid}
                 </Badge>
               </div>

@@ -273,7 +273,8 @@ export default function EvaluationPage() {
             {row.map((cell, j) => (
               <TableCell key={j} className="text-center">
                 <Badge
-                  variant={i === j ? "default" : "outline"}
+                  // variant={i === j ? "default" : "outline"}
+                  variant={"outline"}
                   className={
                     i === j
                       ? "bg-emerald-100 dark:bg-emerald-900/50 min-w-10 font-mono text-black"
