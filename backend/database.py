@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, text, JSON
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, text
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 
@@ -45,7 +45,6 @@ class SentiStrength(Base):
     label_sentistrength = Column(String(50))
     ss_max_positive = Column(Integer)
     ss_max_negative = Column(Integer)
-    word_details = Column(JSON, nullable=True, comment="Detail kata positif/negatif dari SentiStrength")
 
     news = relationship("News", back_populates="sentistrength")
 

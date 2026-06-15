@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,11 +41,6 @@ def get_sentistrength_data(
             "label": s.label_sentistrength,
             "pos": s.ss_max_positive,
             "neg": s.ss_max_negative,
-            "word_summary": {
-                "positive_count": len(s.word_details.get("positive_words", [])) if s.word_details else 0,
-                "negative_count": len(s.word_details.get("negative_words", [])) if s.word_details else 0,
-                "has_details": s.word_details is not None,
-            } if s.word_details else None,
         }
         for s, p in result["items"]
     ]
@@ -77,7 +73,10 @@ def get_sentistrength_stats(db: Session = Depends(get_db)):
 def get_sentistrength_distribution(db: Session = Depends(get_db)):
     import numpy as np
 
-    rows = db.query(SentiStrength.ss_max_positive, SentiStrength.ss_max_negative).all()
+    rows = db.query(
+        SentiStrength.ss_max_positive,
+        SentiStrength.ss_max_negative,
+    ).all()
     pos_scores = [r[0] for r in rows if r[0] is not None]
     neg_scores = [r[1] for r in rows if r[1] is not None]
 
@@ -138,7 +137,9 @@ def get_sentistrength_coverage(db: Session = Depends(get_db)):
                         word = parts[0].lower().strip()
                         try:
                             score = int(parts[1].strip())
-                            (lexicon_positive if score > 0 else lexicon_negative).add(word)
+                            (lexicon_positive if score > 0 else lexicon_negative).add(
+                                word
+                            )
                         except (ValueError, IndexError):
                             pass
 
@@ -203,7 +204,11 @@ def get_unknown_words(db: Session = Depends(get_db)):
             if not fname.endswith(".txt"):
                 continue
             try:
-                with open(os.path.join(SENTI_PATH, fname), encoding="utf-8", errors="ignore") as f:
+                with open(
+                    os.path.join(SENTI_PATH, fname),
+                    encoding="utf-8",
+                    errors="ignore",
+                ) as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith(("#", "//")):
@@ -213,12 +218,16 @@ def get_unknown_words(db: Session = Depends(get_db)):
             except OSError:
                 pass
 
-    rows = db.query(
-        SentiStrength.ss_max_positive,
-        SentiStrength.ss_max_negative,
-        SentiStrength.label_sentistrength,
-        Preprocessing.clean_title,
-    ).join(Preprocessing, SentiStrength.news_guid == Preprocessing.news_guid).all()
+    rows = (
+        db.query(
+            SentiStrength.ss_max_positive,
+            SentiStrength.ss_max_negative,
+            SentiStrength.label_sentistrength,
+            Preprocessing.clean_title,
+        )
+        .join(Preprocessing, SentiStrength.news_guid == Preprocessing.news_guid)
+        .all()
+    )
 
     unknown_counter: Counter = Counter()
     examples = []
@@ -230,11 +239,15 @@ def get_unknown_words(db: Session = Depends(get_db)):
             if w not in lexicon_words:
                 unknown_counter[w] += 1
         if not pos and not neg and len(examples) < 5:
-            examples.append({
-                "text": text[:150] + ("..." if len(text) > 150 else ""),
-                "label": label or "unknown",
-                "unknown_words": [w for w in words if w not in lexicon_words][:10],
-            })
+            examples.append(
+                {
+                    "text": text[:150] + ("..." if len(text) > 150 else ""),
+                    "label": label or "unknown",
+                    "unknown_words": [
+                        w for w in words if w not in lexicon_words
+                    ][:10],
+                }
+            )
 
     return {
         "status": "success",
@@ -303,7 +316,9 @@ def get_booster_examples(db: Session = Depends(get_db)):
                     if neighbour in sentiwords:
                         phrase = f"{clean}_{neighbour}"
                         found[phrase]["count"] += 1
-                        found[phrase]["documents"].append({"text": text, "position": position})
+                        found[phrase]["documents"].append(
+                            {"text": text, "position": position}
+                        )
 
     sorted_items = sorted(found.items(), key=lambda x: x[1]["count"], reverse=True)
     return {
@@ -333,12 +348,14 @@ def get_all_negation(db: Session = Depends(get_db)):
             if clean in negation_words and i + 1 < len(words):
                 nxt = strip_punct(words[i + 1])
                 if nxt in sentiwords:
-                    results.append({
-                        "phrase": f"{clean}_{nxt}",
-                        "negation_word": clean,
-                        "sentiment_word": nxt,
-                        "full_text": text,
-                    })
+                    results.append(
+                        {
+                            "phrase": f"{clean}_{nxt}",
+                            "negation_word": clean,
+                            "sentiment_word": nxt,
+                            "full_text": text,
+                        }
+                    )
 
     return {"status": "success", "data": {"total": len(results), "results": results}}
 
@@ -362,40 +379,108 @@ def get_all_booster(db: Session = Depends(get_db)):
                 if 0 <= neighbour_idx < len(words):
                     neighbour = strip_punct(words[neighbour_idx])
                     if neighbour in sentiwords:
-                        results.append({
-                            "phrase": f"{clean}_{neighbour}",
-                            "booster_word": clean,
-                            "sentiment_word": neighbour,
-                            "position": position,
-                            "full_text": text,
-                        })
+                        results.append(
+                            {
+                                "phrase": f"{clean}_{neighbour}",
+                                "booster_word": clean,
+                                "sentiment_word": neighbour,
+                                "position": position,
+                                "full_text": text,
+                            }
+                        )
 
     return {"status": "success", "data": {"total": len(results), "results": results}}
 
 
-# ── Endpoint detail per dokumen (baru) ────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENDPOINT BARU: Detail kata per dokumen (hitung ulang, bukan dari DB)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Cache SentiStrength instance (global, lazy load)
+_senti_instance = None
+
+
+def _get_senti_instance():
+    """Load SentiStrength instance (cached)."""
+    global _senti_instance
+    if _senti_instance is None:
+        try:
+            sys.path.insert(0, SENTI_PATH)
+            from sentistrength import sentistrength
+
+            config = {
+                "negation": True,
+                "booster": True,
+                "ungkapan": True,
+                "consecutive": True,
+                "repeated": True,
+                "emoticon": True,
+                "question": True,
+                "exclamation": True,
+                "punctuation": True,
+            }
+            _senti_instance = sentistrength(config)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Gagal load SentiStrength: {e}"
+            )
+    return _senti_instance
+
 
 @router.get("/{guid}/words")
 def get_sentistrength_words(guid: str, db: Session = Depends(get_db)):
-    """Kata-kata positif dan negatif beserta bobotnya untuk satu dokumen."""
-    result = (
-        db.query(SentiStrength, Preprocessing)
-        .join(Preprocessing, SentiStrength.news_guid == Preprocessing.news_guid)
-        .filter(SentiStrength.news_guid == guid)
-        .first()
-    )
-    if not result:
-        raise HTTPException(status_code=404, detail="Data tidak ditemukan")
+    """
+    Mengembalikan detail kata/frasa positif & negatif untuk satu dokumen.
+    Menghitung ulang menggunakan SentiStrength (tidak diambil dari DB).
+    """
+    # Ambil teks dari Preprocessing
+    prep = db.query(Preprocessing).filter(Preprocessing.news_guid == guid).first()
+    if not prep or not prep.clean_title:
+        raise HTTPException(status_code=404, detail="Data preprocessing tidak ditemukan")
 
-    senti, prep = result
-    word_details = senti.word_details or {}
+    # Load SentiStrength (cached)
+    senti = _get_senti_instance()
+
+    # Hitung ulang
+    result = senti.main(str(prep.clean_title))
+    classified = result["classified_text"]
+
+    # Parse kata-kata dengan skor [X] dari classified_text
+    pattern = r"(\S+)\s*\[(-?\d+)\]"
+    matches = re.findall(pattern, classified)
+
+    positive_words = []
+    negative_words = []
+    seen_words = set()
+
+    for word, score_str in matches:
+        score = int(score_str)
+        clean_word = word.lower().strip()
+
+        # Hindari duplikat
+        if clean_word in seen_words:
+            continue
+        seen_words.add(clean_word)
+
+        if score > 0:
+            positive_words.append(
+                {"word": clean_word, "score": score, "type": "positive"}
+            )
+        elif score < 0:
+            negative_words.append(
+                {"word": clean_word, "score": score, "type": "negative"}
+            )
+
+    # Sort by absolute score (tertinggi dulu)
+    positive_words.sort(key=lambda x: abs(x["score"]), reverse=True)
+    negative_words.sort(key=lambda x: abs(x["score"]), reverse=True)
 
     return {
         "status": "success",
         "data": {
             "guid": guid,
             "clean_title": prep.clean_title,
-            "positive_words": word_details.get("positive_words", []),
-            "negative_words": word_details.get("negative_words", []),
+            "positive_words": positive_words,
+            "negative_words": negative_words,
         },
     }
