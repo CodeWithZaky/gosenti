@@ -69,10 +69,6 @@ export default function PreprocessPage() {
 
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
-  const POLL_INTERVAL = 2000;
-  const MAX_POLL_ATTEMPTS = 30;
-  const pollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pollAttemptRef = useRef(0);
   const mountedRef = useRef(true);
   const initialLoadDoneRef = useRef(false);
 
@@ -85,16 +81,14 @@ export default function PreprocessPage() {
     setHasBlockingError(false);
   }, []);
 
-  // Cleanup polling on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     };
   }, []);
 
-  // Fungsi fetch data - TIDAK throw error
+  // Fungsi fetch data
   const fetchPreprocessData = useCallback(
     async (page: number, pageSize: number) => {
       const controller = new AbortController();
@@ -180,7 +174,6 @@ export default function PreprocessPage() {
           };
         }
 
-        // Clear errors on success (first page only)
         if (page === 1) clearErrors();
         retryCountRef.current = 0;
         return { items: result.items, pagination: result.pagination };
@@ -243,26 +236,6 @@ export default function PreprocessPage() {
     reset,
   } = useLoadMore<PreprocessItem>(fetchPreprocessData);
 
-  // Polling status
-  const pollPreprocessingStatus = useCallback(async (): Promise<boolean> => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch("http://localhost:8000/api/pipeline/status", {
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const result = await res.json();
-        if (result.status === "completed" || result.preprocessing_done === true)
-          return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }, []);
-
   // Initial load
   useEffect(() => {
     if (initialLoadDoneRef.current) return;
@@ -275,6 +248,7 @@ export default function PreprocessPage() {
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ✅ RUN PREPROCESSING — tanpa polling
   const runPreprocessing = async () => {
     setIsRunning(true);
     clearErrors();
@@ -331,56 +305,12 @@ export default function PreprocessPage() {
           description: result.message || "Data telah diproses",
         });
         reset();
-        pollAttemptRef.current = 0;
-        const pollForData = async () => {
-          if (!mountedRef.current) return;
-          pollAttemptRef.current++;
-          if (pollAttemptRef.current > MAX_POLL_ATTEMPTS) {
-            toast.info("Masih memproses data...");
-            try {
-              await loadMore();
-            } catch {}
-            setIsRunning(false);
-            return;
-          }
-          const isReady = await pollPreprocessingStatus();
-          if (isReady) {
-            try {
-              await loadMore();
-              setIsRunning(false);
-            } catch {
-              if (mountedRef.current) toast.error("Gagal memuat data");
-              setIsRunning(false);
-            }
-          } else {
-            pollTimeoutRef.current = setTimeout(pollForData, POLL_INTERVAL);
-          }
-        };
-        pollTimeoutRef.current = setTimeout(pollForData, 1500);
-      } else if (result.status === "running") {
-        toast.info("Preprocessing sedang berjalan", { id: toastId });
-        pollAttemptRef.current = 0;
-        const pollRunning = async () => {
-          if (!mountedRef.current) return;
-          pollAttemptRef.current++;
-          if (pollAttemptRef.current > MAX_POLL_ATTEMPTS) {
-            toast.warning("Mungkin masih berjalan");
-            setIsRunning(false);
-            return;
-          }
-          const isReady = await pollPreprocessingStatus();
-          if (isReady) {
-            toast.success("Preprocessing selesai!");
-            reset();
-            try {
-              await loadMore();
-            } catch {}
-            setIsRunning(false);
-          } else {
-            pollTimeoutRef.current = setTimeout(pollRunning, POLL_INTERVAL);
-          }
-        };
-        pollTimeoutRef.current = setTimeout(pollRunning, POLL_INTERVAL);
+        setTimeout(async () => {
+          try {
+            await loadMore();
+          } catch {}
+          if (mountedRef.current) setIsRunning(false);
+        }, 1000);
       } else {
         addError({
           type: "data",
