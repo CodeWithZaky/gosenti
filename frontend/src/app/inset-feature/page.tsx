@@ -147,7 +147,8 @@ export default function InsetFeaturePage() {
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
   const mountedRef = useRef(true);
-  const initialLoadDoneRef = useRef(false);
+
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
 
   const [stats, setStats] = useState<InsetStats>({
     max_pos: 0,
@@ -220,6 +221,7 @@ export default function InsetFeaturePage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
@@ -239,6 +241,7 @@ export default function InsetFeaturePage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
@@ -282,6 +285,7 @@ export default function InsetFeaturePage() {
             page_size: pageSize,
             total: 0,
             total_pages: 0,
+            has_more: false,
           },
         };
       }
@@ -297,24 +301,26 @@ export default function InsetFeaturePage() {
     total,
     pagination,
     loadMore,
-    reset,
+    forceReload,
   } = useLoadMore<InsetFeatureItem>(fetchInsetFeatureData);
 
   useEffect(() => {
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
-    const init = async () => {
-      try {
-        await loadMore();
-      } catch {}
-    };
-    init();
-  }, []); // eslint-disable-line
+    if (needInitialLoad) {
+      const doLoad = async () => {
+        try {
+          await loadMore();
+        } catch {}
+        setNeedInitialLoad(false);
+      };
+      doLoad();
+    }
+  }, [needInitialLoad, loadMore]);
 
   // ── Run Pipeline ────────────────────────────────────────────────────────
 
   const runInsetFeature = async () => {
     setIsRunning(true);
+    clearErrors();
     const endpoint = "http://localhost:8000/api/pipeline/inset_feature";
     const toastId = toast.loading("Menjalankan InSet Feature...");
 
@@ -368,14 +374,14 @@ export default function InsetFeaturePage() {
           id: toastId,
           description: result.message || "Data telah diproses",
         });
-        clearErrors();
-        reset();
+        setIsRunning(false);
         setTimeout(async () => {
-          try {
-            await loadMore();
-          } catch {}
-          if (mountedRef.current) setIsRunning(false);
-        }, 1000);
+          if (mountedRef.current) {
+            try {
+              await forceReload();
+            } catch {}
+          }
+        }, 500);
       } else {
         addError({
           type: "data",
@@ -428,8 +434,7 @@ export default function InsetFeaturePage() {
     retryCountRef.current++;
     clearErrors();
     try {
-      reset();
-      await loadMore();
+      await forceReload();
     } catch {
     } finally {
       if (mountedRef.current) setIsRetrying(false);
@@ -463,6 +468,7 @@ export default function InsetFeaturePage() {
   };
 
   const sortedData = useMemo(() => {
+    if (data.length === 0) return [];
     return [...data].sort((a, b) => {
       let valA = sortField === "pos" ? a.inset_pos : a.inset_neg;
       let valB = sortField === "pos" ? b.inset_pos : b.inset_neg;
@@ -810,14 +816,11 @@ export default function InsetFeaturePage() {
                 <TableBody>
                   {sortedData.map((item, index) => {
                     const posCat = getCategory(
-                      item.inset_pos_norm,
+                      item.inset_pos_norm ?? 0,
                       item.inset_pos,
                     );
                     const negCat = getCategory(
-                      item.inset_neg !== 0
-                        ? Math.abs(item.inset_neg) /
-                            Math.abs(stats.min_neg || 1)
-                        : 0,
+                      item.inset_neg_norm ?? 0,
                       item.inset_neg,
                     );
                     return (
@@ -849,13 +852,13 @@ export default function InsetFeaturePage() {
                               </Badge>
                             </div>
                             <Progress
-                              value={
-                                item.inset_pos_norm
-                                  ? item.inset_pos_norm * 100
-                                  : 0
-                              }
+                              value={(item.inset_pos_norm ?? 0) * 100}
                               className="h-1.5"
                             />
+                            {/* ✅ Tampilkan angka normalisasi */}
+                            <p className="text-[10px] text-muted-foreground text-right">
+                              {item.inset_pos_norm?.toFixed(4) ?? "0.0000"}
+                            </p>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -872,15 +875,13 @@ export default function InsetFeaturePage() {
                               </Badge>
                             </div>
                             <Progress
-                              value={
-                                item.inset_neg !== 0 && stats.min_neg !== 0
-                                  ? (Math.abs(item.inset_neg) /
-                                      Math.abs(stats.min_neg)) *
-                                    100
-                                  : 0
-                              }
+                              value={Math.abs(item.inset_neg_norm ?? 0) * 100}
                               className="[&>div]:bg-red-500 h-1.5"
                             />
+                            {/* ✅ Tampilkan angka normalisasi */}
+                            <p className="text-[10px] text-muted-foreground text-right">
+                              {item.inset_neg_norm?.toFixed(4) ?? "0.0000"}
+                            </p>
                           </div>
                         </TableCell>
                         <TableCell className="text-center">
@@ -945,6 +946,9 @@ export default function InsetFeaturePage() {
                     value={(selectedItem.inset_pos_norm ?? 0) * 100}
                     className="mt-3 h-2"
                   />
+                  <p className="mt-1 text-[10px] text-muted-foreground text-right">
+                    {selectedItem.inset_pos_norm?.toFixed(4) ?? "0.0000"}
+                  </p>
                 </div>
                 <div className="bg-red-50 p-4 border rounded-lg">
                   <TrendingDown className="mb-2 w-5 h-5 text-red-600" />
@@ -952,15 +956,12 @@ export default function InsetFeaturePage() {
                     {selectedItem.inset_neg}
                   </p>
                   <Progress
-                    value={
-                      selectedItem.inset_neg !== 0
-                        ? (Math.abs(selectedItem.inset_neg) /
-                            Math.abs(stats.min_neg || 1)) *
-                          100
-                        : 0
-                    }
+                    value={Math.abs(selectedItem.inset_neg_norm ?? 0) * 100}
                     className="[&>div]:bg-red-500 mt-3 h-2"
                   />
+                  <p className="mt-1 text-[10px] text-muted-foreground text-right">
+                    {selectedItem.inset_neg_norm?.toFixed(4) ?? "0.0000"}
+                  </p>
                 </div>
               </div>
               <div className="bg-muted/50 p-4 border rounded-lg text-center">

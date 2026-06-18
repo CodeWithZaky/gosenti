@@ -140,7 +140,9 @@ export default function TfIdfPage() {
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
   const mountedRef = useRef(true);
-  const initialLoadDoneRef = useRef(false);
+
+  // ✅ Gunakan state untuk tracking initial load
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
 
   const addError = useCallback((error: ErrorDetail) => {
     setErrors((prev) => [...prev, error]);
@@ -160,6 +162,7 @@ export default function TfIdfPage() {
   }, []);
 
   const fetchSummary = async () => {
+    console.log("[TF-IDF] Fetching summary...");
     const endpoint = "http://localhost:8000/api/tfidf/summary";
     try {
       const controller = new AbortController();
@@ -169,6 +172,26 @@ export default function TfIdfPage() {
         headers: { Accept: "application/json" },
       });
       clearTimeout(timeoutId);
+
+      console.log(`[TF-IDF] Summary response status: ${res.status}`);
+
+      // ✅ Handle 404 - summary belum tersedia, set kosong tanpa error
+      if (res.status === 404) {
+        console.log("[TF-IDF] Summary not yet available (404)");
+        setSummary({
+          total_features: 0,
+          top_features: [],
+          stats: {
+            mean_tf: 0,
+            mean_idf: 0,
+            mean_tfidf: 0,
+            max_tfidf: 0,
+            min_tfidf: 0,
+          },
+        });
+        setSummaryError(false);
+        return false;
+      }
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -189,9 +212,13 @@ export default function TfIdfPage() {
           rawError: serverMessage,
         });
         setSummaryError(true);
-        return;
+        return false;
       }
       const data = await res.json();
+      console.log(
+        `[TF-IDF] Summary received: ${data.top_features?.length} features`,
+      );
+
       if (!data.error && data.top_features) {
         setSummary({
           total_features: data.total_features || 0,
@@ -205,28 +232,28 @@ export default function TfIdfPage() {
           },
         });
         setSummaryError(false);
+        return true;
       } else {
-        addError({
-          type: "data",
-          message: "Format data summary tidak sesuai",
-          endpoint,
-          timestamp: new Date(),
-          rawError: JSON.stringify(data),
+        // ✅ Data tidak sesuai, anggap belum tersedia
+        console.log("[TF-IDF] Summary data not available:", data);
+        setSummary({
+          total_features: 0,
+          top_features: [],
+          stats: {
+            mean_tf: 0,
+            mean_idf: 0,
+            mean_tfidf: 0,
+            max_tfidf: 0,
+            min_tfidf: 0,
+          },
         });
-        setSummaryError(true);
+        setSummaryError(false);
+        return false;
       }
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        addError({
-          type: "timeout",
-          message: "Timeout mengambil summary (15 detik)",
-          endpoint,
-          timestamp: new Date(),
-        });
-      } else if (
-        err instanceof TypeError &&
-        err.message === "Failed to fetch"
-      ) {
+      console.error("[TF-IDF] Summary fetch error:", err);
+      // ✅ Network error tetap dianggap error
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
         addError({
           type: "network",
           message: "Gagal terhubung ke server saat mengambil summary",
@@ -234,20 +261,28 @@ export default function TfIdfPage() {
           timestamp: new Date(),
           rawError: err.message,
         });
+        setSummaryError(true);
       } else {
-        addError({
-          type: "unknown",
-          message:
-            err instanceof Error ? err.message : "Kesalahan tidak diketahui",
-          endpoint,
-          timestamp: new Date(),
+        // Timeout atau error lain, set kosong
+        setSummary({
+          total_features: 0,
+          top_features: [],
+          stats: {
+            mean_tf: 0,
+            mean_idf: 0,
+            mean_tfidf: 0,
+            max_tfidf: 0,
+            min_tfidf: 0,
+          },
         });
+        setSummaryError(false);
       }
-      setSummaryError(true);
+      return false;
     }
   };
 
   const fetchWordcloud = async () => {
+    console.log("[TF-IDF] Fetching wordcloud...");
     setWordcloudLoading(true);
     const endpoint = "http://localhost:8000/api/tfidf/wordcloud";
     try {
@@ -258,6 +293,16 @@ export default function TfIdfPage() {
         headers: { Accept: "application/json" },
       });
       clearTimeout(timeoutId);
+
+      console.log(`[TF-IDF] Wordcloud response status: ${res.status}`);
+
+      // ✅ Handle 404 - wordcloud belum tersedia, set kosong tanpa error
+      if (res.status === 404) {
+        console.log("[TF-IDF] Wordcloud not yet available (404)");
+        setWordcloud({});
+        setWordcloudError(false);
+        return;
+      }
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -272,30 +317,23 @@ export default function TfIdfPage() {
         return;
       }
       const data = await res.json();
+      console.log(
+        `[TF-IDF] Wordcloud received: ${Object.keys(data.data || {}).length} categories`,
+      );
+
       if (data.status === "success") {
         setWordcloud(data.data || {});
         setWordcloudError(false);
       } else {
-        addError({
-          type: "data",
-          message: "Format data wordcloud tidak sesuai",
-          endpoint,
-          timestamp: new Date(),
-        });
-        setWordcloudError(true);
+        // ✅ Kalau status bukan success, anggap data belum tersedia
+        console.log("[TF-IDF] Wordcloud data not available:", data);
+        setWordcloud({});
+        setWordcloudError(false);
       }
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        addError({
-          type: "timeout",
-          message: "Timeout mengambil wordcloud (15 detik)",
-          endpoint,
-          timestamp: new Date(),
-        });
-      } else if (
-        err instanceof TypeError &&
-        err.message === "Failed to fetch"
-      ) {
+      console.error("[TF-IDF] Wordcloud fetch error:", err);
+      // ✅ Network error tetap dianggap error
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
         addError({
           type: "network",
           message: "Gagal terhubung ke server saat mengambil wordcloud",
@@ -303,32 +341,35 @@ export default function TfIdfPage() {
           timestamp: new Date(),
           rawError: err.message,
         });
+        setWordcloudError(true);
       } else {
-        addError({
-          type: "unknown",
-          message:
-            err instanceof Error ? err.message : "Kesalahan tidak diketahui",
-          endpoint,
-          timestamp: new Date(),
-        });
+        // Timeout atau error lain, set kosong
+        setWordcloud({});
+        setWordcloudError(false);
       }
-      setWordcloudError(true);
     } finally {
       if (mountedRef.current) setWordcloudLoading(false);
     }
   };
 
+  // ✅ Initial load dengan needInitialLoad state
   useEffect(() => {
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
-    const init = async () => {
-      clearErrors();
-      await fetchSummary();
-      await fetchWordcloud();
-      if (mountedRef.current) setLoading(false);
-    };
-    init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (needInitialLoad) {
+      console.log("[TF-IDF] Triggering initial load via useEffect");
+      const init = async () => {
+        clearErrors();
+        setLoading(true);
+        await fetchSummary();
+        await fetchWordcloud();
+        if (mountedRef.current) {
+          setLoading(false);
+          setNeedInitialLoad(false);
+        }
+        console.log("[TF-IDF] Initial load completed");
+      };
+      init();
+    }
+  }, [needInitialLoad]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRunTfidf = async () => {
     setIsProcessing(true);
@@ -348,61 +389,103 @@ export default function TfIdfPage() {
       });
       clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        const statusCode = response.status;
-        let serverMessage = "";
-        try {
-          const errorData = await response.json();
-          serverMessage =
-            errorData.message || errorData.detail || JSON.stringify(errorData);
-        } catch {
-          serverMessage = `HTTP ${statusCode}`;
-        }
+      console.log(`[TF-IDF Pipeline] Response status: ${response.status}`);
+
+      // ✅ Handle 404 - endpoint tidak ditemukan
+      if (response.status === 404) {
         addError({
-          type: statusCode >= 500 ? "server" : "data",
-          message: `TF-IDF gagal (${statusCode})`,
-          statusCode,
+          type: "data",
+          message: "Endpoint TF-IDF tidak ditemukan (404)",
+          statusCode: 404,
           endpoint,
           timestamp: new Date(),
-          rawError: serverMessage,
         });
-        toast.error("TF-IDF gagal!", {
+        toast.error("Endpoint tidak ditemukan", {
           id: toastId,
-          description: serverMessage,
+          description: "Pastikan API pipeline tersedia",
         });
         setIsProcessing(false);
         return;
       }
 
       const result = await response.json();
+      console.log("[TF-IDF Pipeline] Full result:", result);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        const serverMessage =
+          result.message || result.detail || `HTTP ${statusCode}`;
+
+        addError({
+          type: statusCode >= 500 ? "server" : "data",
+          message: `TF-IDF gagal (${statusCode}): ${serverMessage}`,
+          statusCode,
+          endpoint,
+          timestamp: new Date(),
+          rawError: JSON.stringify(result),
+        });
+
+        if (statusCode === 422) {
+          toast.error("Data belum lengkap", {
+            id: toastId,
+            description:
+              serverMessage || "Pastikan preprocessing sudah dijalankan",
+          });
+        } else {
+          toast.error("TF-IDF gagal!", {
+            id: toastId,
+            description: serverMessage,
+          });
+        }
+        setIsProcessing(false);
+        return;
+      }
+
       if (result.status === "success") {
         toast.success("TF-IDF berhasil!", {
           id: toastId,
           description: result.message || "Fitur diekstrak",
         });
+
+        console.log("[TF-IDF Pipeline] Success! Reloading data...");
+
         retryCountRef.current = 0;
+        setIsProcessing(false);
+
+        // ✅ Set loading true untuk menunjukkan loading indicator
+        setLoading(true);
+        setWordcloudLoading(true);
+
+        // ✅ Tunggu sebentar lalu reload data
         setTimeout(async () => {
           if (mountedRef.current) {
+            console.log(
+              "[TF-IDF Pipeline] Fetching new summary and wordcloud...",
+            );
             await fetchSummary();
             fetchWordcloud();
-            setIsProcessing(false);
+            setLoading(false);
+            console.log("[TF-IDF Pipeline] Reload completed!");
           }
-        }, 2000);
+        }, 500);
       } else {
+        const errorMsg =
+          result.message || result.detail || "Status tidak dikenal";
         addError({
           type: "data",
-          message: `Status respons tidak dikenal: ${result.status}`,
+          message: `Status respons: ${result.status} - ${errorMsg}`,
           endpoint,
           timestamp: new Date(),
           rawError: JSON.stringify(result),
         });
         toast.error("TF-IDF gagal!", {
           id: toastId,
-          description: result.message || "Status tidak dikenal",
+          description: errorMsg,
         });
         setIsProcessing(false);
       }
     } catch (err: unknown) {
+      console.error("[TF-IDF Pipeline] Error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -449,11 +532,14 @@ export default function TfIdfPage() {
     retryCountRef.current++;
     clearErrors();
     setLoading(true);
+    setWordcloudLoading(true);
+    console.log("[TF-IDF] Retrying data fetch...");
     await fetchSummary();
     await fetchWordcloud();
     if (mountedRef.current) {
       setLoading(false);
       setIsRetrying(false);
+      console.log("[TF-IDF] Retry completed");
     }
   };
 
@@ -717,7 +803,22 @@ export default function TfIdfPage() {
     );
   };
 
-  if (loading) return <LoadingSkeleton />;
+  // Debug render state
+  console.log("[TF-IDF Page] Render:", {
+    loading,
+    wordcloudLoading,
+    isProcessing,
+    needInitialLoad,
+    featuresCount: summary.top_features.length,
+    wordcloudKeys: Object.keys(wordcloud),
+  });
+
+  if (loading) {
+    console.log("[TF-IDF Page] Rendering LoadingSkeleton");
+    return <LoadingSkeleton />;
+  }
+
+  console.log("[TF-IDF Page] Rendering main content");
 
   const unigramCount = summary.top_features.filter(
     (f) => f.type === "unigram",
@@ -769,7 +870,7 @@ export default function TfIdfPage() {
         {/* ERROR DISPLAY */}
         <ErrorDisplay />
 
-        {/* Partial error warnings */}
+        {/* Partial error warnings - hanya tampilkan jika benar-benar error (bukan 404) */}
         {summaryError && !errors.length && (
           <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-950/30 p-3 border border-amber-200 dark:border-amber-800 rounded-lg">
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -1277,7 +1378,42 @@ export default function TfIdfPage() {
                       Memuat word cloud...
                     </span>
                   </div>
+                ) : Object.keys(wordcloud).length === 0 &&
+                  summary.top_features.length > 0 ? (
+                  // ✅ Case: TF-IDF sudah ada, tapi wordcloud belum
+                  <div className="flex flex-col items-center gap-4 py-16">
+                    <div className="bg-amber-100 dark:bg-amber-900/20 p-4 rounded-full">
+                      <Cloud className="w-12 h-12 text-amber-400" />
+                    </div>
+                    <div className="space-y-2 text-center">
+                      <h3 className="font-semibold text-lg">
+                        Word Cloud Belum Tersedia
+                      </h3>
+                      <p className="max-w-md text-muted-foreground">
+                        Data word cloud belum dibuat. Jalankan ulang TF-IDF
+                        untuk menghasilkan visualisasi word cloud.
+                      </p>
+                    </div>
+                    <Button
+                      onClick={handleRunTfidf}
+                      disabled={isProcessing}
+                      className="gap-2"
+                    >
+                      {isProcessing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Memproses...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-4 h-4" />
+                          Jalankan TF-IDF
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 ) : Object.keys(wordcloud).length === 0 ? (
+                  // ✅ Case: Belum ada data sama sekali
                   <div className="flex flex-col items-center gap-4 py-16">
                     <div className="bg-sky-100 dark:bg-sky-900/20 p-4 rounded-full">
                       <Cloud className="w-12 h-12 text-sky-400" />
@@ -1306,22 +1442,9 @@ export default function TfIdfPage() {
                         </>
                       )}
                     </Button>
-                    {wordcloudError && (
-                      <p className="text-red-500 text-xs">
-                        Gagal memuat wordcloud.{" "}
-                        <button
-                          onClick={() => {
-                            setWordcloudError(false);
-                            fetchWordcloud();
-                          }}
-                          className="underline"
-                        >
-                          Coba lagi
-                        </button>
-                      </p>
-                    )}
                   </div>
                 ) : (
+                  // ✅ Word cloud tersedia
                   <div className="gap-6 grid grid-cols-1 md:grid-cols-3">
                     {(["positive", "neutral", "negative"] as const).map(
                       (label) => {

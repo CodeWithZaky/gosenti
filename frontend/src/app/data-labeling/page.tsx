@@ -21,15 +21,22 @@ import {
 } from "@/components/ui/table";
 import { useLoadMore } from "@/hooks/useLoadMore";
 import {
+  AlertTriangle,
+  Bug,
   Eye,
   FileText,
+  Info,
   Loader2,
   Minus,
   Play,
+  RefreshCw,
   Scale,
+  ServerCrash,
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
+  WifiOff,
+  XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -90,7 +97,9 @@ export default function SentiStrengthPage() {
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
   const mountedRef = useRef(true);
-  const initialLoadDoneRef = useRef(false);
+
+  // ✅ Ganti ref dengan state
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
 
   const [stats, setStats] = useState<SentiStrengthStats>({
     total: 0,
@@ -124,12 +133,16 @@ export default function SentiStrengthPage() {
       const timeoutId = setTimeout(() => controller.abort(), 15000);
       const endpoint = `http://localhost:8000/api/data/sentistrength?page=${page}&page_size=${pageSize}`;
 
+      console.log(`[SentiStrength FetchData] Requesting: ${endpoint}`);
+
       try {
         const res = await fetch(endpoint, {
           signal: controller.signal,
           headers: { Accept: "application/json" },
         });
         clearTimeout(timeoutId);
+
+        console.log(`[SentiStrength FetchData] Response status: ${res.status}`);
 
         if (!res.ok) {
           const statusCode = res.status;
@@ -159,11 +172,16 @@ export default function SentiStrengthPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
 
         const result = await res.json();
+        console.log(
+          `[SentiStrength FetchData] Data received: ${result.items?.length} items`,
+        );
+
         if (!result || !result.items || !Array.isArray(result.items)) {
           addError({
             type: "data",
@@ -179,6 +197,7 @@ export default function SentiStrengthPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
@@ -188,6 +207,8 @@ export default function SentiStrengthPage() {
         return { items: result.items, pagination: result.pagination };
       } catch (err: unknown) {
         clearTimeout(timeoutId);
+        console.error("[SentiStrength FetchData] Error:", err);
+
         if (err instanceof DOMException && err.name === "AbortError") {
           addError({
             type: "timeout",
@@ -223,6 +244,7 @@ export default function SentiStrengthPage() {
             page_size: pageSize,
             total: 0,
             total_pages: 0,
+            has_more: false,
           },
         };
       }
@@ -239,42 +261,57 @@ export default function SentiStrengthPage() {
     pagination,
     loadMore,
     reset,
+    forceReload, // ✅ Ambil forceReload
   } = useLoadMore<SentiStrengthItem>(fetchSentiStrengthData);
 
   const fetchStats = useCallback(async () => {
+    console.log("[SentiStrength] Fetching stats...");
     try {
       const res = await fetch(
         "http://localhost:8000/api/data/sentistrength/stats",
       );
       if (!res.ok) {
+        console.log(`[SentiStrength] Stats response status: ${res.status}`);
         setStatsError(true);
         return;
       }
       const result = await res.json();
+      console.log("[SentiStrength] Stats received:", result.data);
       if (result.status === "success" && result.data) {
         setStats(result.data);
         setStatsError(false);
       } else {
         setStatsError(true);
       }
-    } catch {
+    } catch (error) {
+      console.error("[SentiStrength] Stats fetch error:", error);
       setStatsError(true);
     }
   }, []);
 
+  // ✅ Initial load dengan needInitialLoad state
   useEffect(() => {
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
-    const init = async () => {
-      try {
-        await loadMore();
-      } catch {}
-      if (mountedRef.current) fetchStats();
-    };
-    init();
-  }, []); // eslint-disable-line
+    if (needInitialLoad) {
+      console.log("[SentiStrengthPage] Triggering initial load via useEffect");
+      const init = async () => {
+        try {
+          await loadMore();
+          console.log("[SentiStrengthPage] Initial data load completed");
+          if (mountedRef.current) {
+            fetchStats();
+            console.log("[SentiStrengthPage] Stats fetch completed");
+          }
+        } catch (error) {
+          console.error("[SentiStrengthPage] Initial load failed:", error);
+        } finally {
+          setNeedInitialLoad(false);
+        }
+      };
+      init();
+    }
+  }, [needInitialLoad, loadMore, fetchStats]);
 
-  // ✅ RUN SENTISTRENGTH — tanpa polling
+  // ✅ RUN SENTISTRENGTH — dengan forceReload
   const runSentistrength = async () => {
     setIsRunning(true);
     clearErrors();
@@ -290,6 +327,8 @@ export default function SentiStrengthPage() {
         headers: { "Content-Type": "application/json" },
       });
       clearTimeout(timeoutId);
+
+      console.log(`[SentiStrength Pipeline] Response status: ${res.status}`);
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -326,19 +365,41 @@ export default function SentiStrengthPage() {
       }
 
       const result = await res.json();
+      console.log("[SentiStrength Pipeline] Result:", result);
+
       if (result.status === "success") {
         toast.success("SentiStrength berhasil!", {
           id: toastId,
           description: result.message || "Data telah dilabeli",
         });
-        reset();
+
+        console.log(
+          "[SentiStrength Pipeline] Success! Triggering force reload...",
+        );
+
+        // ✅ Set isRunning false dulu
+        setIsRunning(false);
+
+        // ✅ Force reload data dan stats
         setTimeout(async () => {
-          try {
-            await loadMore();
-            if (mountedRef.current) fetchStats();
-          } catch {}
-          if (mountedRef.current) setIsRunning(false);
-        }, 1000);
+          if (mountedRef.current) {
+            try {
+              console.log("[SentiStrength Pipeline] Calling forceReload...");
+              await forceReload();
+              console.log(
+                "[SentiStrength Pipeline] Force reload completed, fetching stats...",
+              );
+              fetchStats();
+              console.log("[SentiStrength Pipeline] Stats fetched!");
+            } catch (error) {
+              console.error(
+                "[SentiStrength Pipeline] Force reload failed:",
+                error,
+              );
+              toast.error("Gagal memuat ulang data");
+            }
+          }
+        }, 500);
       } else {
         addError({
           type: "data",
@@ -350,6 +411,7 @@ export default function SentiStrengthPage() {
         setIsRunning(false);
       }
     } catch (err: unknown) {
+      console.error("[SentiStrength Pipeline] Error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -391,10 +453,12 @@ export default function SentiStrengthPage() {
     retryCountRef.current++;
     clearErrors();
     try {
-      reset();
-      await loadMore();
+      console.log("[SentiStrength Retry] Force reloading...");
+      await forceReload(); // ✅ Gunakan forceReload
       if (mountedRef.current) fetchStats();
-    } catch {
+      console.log("[SentiStrength Retry] Completed");
+    } catch (error) {
+      console.error("[SentiStrength Retry] Error:", error);
     } finally {
       if (mountedRef.current) setIsRetrying(false);
     }
@@ -417,6 +481,156 @@ export default function SentiStrengthPage() {
     } finally {
       if (mountedRef.current) setIsLoadingDetail(false);
     }
+  };
+
+  // ── Error Display ──────────────────────────────────────────────────────
+
+  const ErrorDisplay = () => {
+    if (errors.length === 0) return null;
+    const latestError = errors[errors.length - 1];
+    const hasNetworkError = errors.some((e) => e.type === "network");
+    const hasServerError = errors.some((e) => e.type === "server");
+    const hasTimeout = errors.some((e) => e.type === "timeout");
+    const getErrorIcon = () => {
+      if (hasNetworkError) return <WifiOff className="w-5 h-5" />;
+      if (hasTimeout) return <AlertTriangle className="w-5 h-5" />;
+      if (hasServerError) return <ServerCrash className="w-5 h-5" />;
+      return <Bug className="w-5 h-5" />;
+    };
+    const getErrorColor = () => {
+      if (hasNetworkError)
+        return "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/30";
+      if (hasTimeout)
+        return "border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/30";
+      if (hasServerError)
+        return "border-orange-400 dark:border-orange-600 bg-orange-50 dark:bg-orange-950/30";
+      return "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-950/30";
+    };
+
+    return (
+      <Card className={`border-2 ${getErrorColor()} shadow-lg`}>
+        <CardContent className="space-y-3 p-4">
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex items-center gap-2">
+              <div className="bg-white dark:bg-gray-800 p-1.5 rounded-full">
+                {getErrorIcon()}
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">
+                  {hasNetworkError
+                    ? "Koneksi Gagal"
+                    : hasTimeout
+                      ? "Request Timeout"
+                      : hasServerError
+                        ? "Server Error"
+                        : "Error"}
+                </h3>
+                <p className="text-muted-foreground text-xs">
+                  {errors.length} error •{" "}
+                  {latestError.timestamp.toLocaleTimeString()}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowErrorDetails(!showErrorDetails)}
+                className="h-7 text-xs"
+              >
+                {showErrorDetails ? "Sembunyikan" : "Detail"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearErrors}
+                className="h-7 text-xs"
+              >
+                <XCircle className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+          <div className="bg-white dark:bg-gray-900 p-3 border rounded-lg">
+            <div className="flex items-start gap-2">
+              <Info className="mt-0.5 w-4 h-4 text-muted-foreground shrink-0" />
+              <div>
+                <p className="font-medium text-sm">{latestError.message}</p>
+                {latestError.endpoint && (
+                  <p className="mt-1 font-mono text-muted-foreground text-xs">
+                    {latestError.endpoint}
+                  </p>
+                )}
+                {latestError.statusCode && (
+                  <p className="text-muted-foreground text-xs">
+                    Status: {latestError.statusCode}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+          {showErrorDetails && (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              <p className="font-medium text-muted-foreground text-xs">
+                Semua Error ({errors.length}):
+              </p>
+              {errors.map((err, i) => (
+                <div
+                  key={i}
+                  className="space-y-1 bg-white dark:bg-gray-900 p-2.5 border rounded-lg text-xs"
+                >
+                  <div className="flex justify-between items-center">
+                    <Badge
+                      variant="outline"
+                      className={
+                        err.type === "network"
+                          ? "border-red-300 text-red-600"
+                          : err.type === "timeout"
+                            ? "border-amber-300 text-amber-600"
+                            : err.type === "server"
+                              ? "border-orange-300 text-orange-600"
+                              : "border-yellow-300 text-yellow-600"
+                      }
+                    >
+                      {err.type.toUpperCase()}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {err.timestamp.toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="font-medium">{err.message}</p>
+                  {err.rawError && (
+                    <div className="bg-muted/50 p-2 rounded font-mono text-[10px] break-all whitespace-pre-wrap">
+                      {err.rawError}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-between items-center pt-1">
+            <p className="text-muted-foreground text-xs">
+              Retry: {retryCountRef.current}/{MAX_RETRIES}
+            </p>
+            <Button
+              onClick={handleRetry}
+              disabled={isRetrying || retryCountRef.current >= MAX_RETRIES}
+              size="sm"
+              variant="default"
+              className="gap-1"
+            >
+              {isRetrying ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3 h-3" />
+              )}
+              {retryCountRef.current >= MAX_RETRIES
+                ? "Batas Tercapai"
+                : "Coba Lagi"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
   };
 
   const getLabelBadge = (label: string) => {
@@ -459,7 +673,22 @@ export default function SentiStrengthPage() {
     }
   };
 
-  if (initialLoading) return <LoadingSkeleton />;
+  // Debug render state
+  console.log("[SentiStrengthPage] Render:", {
+    initialLoading,
+    loading,
+    dataLength: data.length,
+    needInitialLoad,
+    isRunning,
+    total,
+  });
+
+  if (initialLoading) {
+    console.log("[SentiStrengthPage] Rendering LoadingSkeleton");
+    return <LoadingSkeleton />;
+  }
+
+  console.log("[SentiStrengthPage] Rendering main content");
 
   const positivePct =
     stats.total > 0 ? ((stats.positive / stats.total) * 100).toFixed(1) : "0";
@@ -497,6 +726,9 @@ export default function SentiStrengthPage() {
           )}
         </Button>
       </div>
+
+      {/* ERROR DISPLAY */}
+      <ErrorDisplay />
 
       {/* Stats Cards */}
       <div className="gap-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
