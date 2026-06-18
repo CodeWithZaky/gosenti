@@ -49,7 +49,7 @@ def _load_or_create_count_vectorizer(db: Session):
     
     # Buat baru dari database
     prep_data = db.query(Preprocessing).all()
-    texts = [p.clean_title for p in prep_data]
+    texts = [p.stemming for p in prep_data]
     
     if not texts:
         raise HTTPException(status_code=404, detail="Tidak ada data preprocessing")

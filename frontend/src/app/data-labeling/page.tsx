@@ -60,11 +60,6 @@ interface SentiStrengthItem {
   label: string;
   pos: number;
   neg: number;
-  word_summary?: {
-    positive_count: number;
-    negative_count: number;
-    has_details: boolean;
-  };
 }
 
 interface SentiStrengthStats {
@@ -93,7 +88,6 @@ export default function SentiStrengthPage() {
   const [wordData, setWordData] = useState<WordDetailData | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
-  // Error states
   const [errors, setErrors] = useState<ErrorDetail[]>([]);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -102,12 +96,10 @@ export default function SentiStrengthPage() {
 
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
-  const POLL_INTERVAL = 2000;
-  const MAX_POLL_ATTEMPTS = 30;
-  const pollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pollAttemptRef = useRef(0);
   const mountedRef = useRef(true);
-  const initialLoadDoneRef = useRef(false);
+
+  // ✅ Ganti ref dengan state
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
 
   const [stats, setStats] = useState<SentiStrengthStats>({
     total: 0,
@@ -128,12 +120,10 @@ export default function SentiStrengthPage() {
     setStatsError(false);
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     };
   }, []);
 
@@ -143,12 +133,16 @@ export default function SentiStrengthPage() {
       const timeoutId = setTimeout(() => controller.abort(), 15000);
       const endpoint = `http://localhost:8000/api/data/sentistrength?page=${page}&page_size=${pageSize}`;
 
+      console.log(`[SentiStrength FetchData] Requesting: ${endpoint}`);
+
       try {
         const res = await fetch(endpoint, {
           signal: controller.signal,
           headers: { Accept: "application/json" },
         });
         clearTimeout(timeoutId);
+
+        console.log(`[SentiStrength FetchData] Response status: ${res.status}`);
 
         if (!res.ok) {
           const statusCode = res.status;
@@ -178,18 +172,22 @@ export default function SentiStrengthPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
 
         const result = await res.json();
-        if (!result || typeof result !== "object") {
+        console.log(
+          `[SentiStrength FetchData] Data received: ${result.items?.length} items`,
+        );
+
+        if (!result || !result.items || !Array.isArray(result.items)) {
           addError({
             type: "data",
-            message: "Respons server tidak valid",
+            message: "Format data tidak sesuai",
             endpoint,
             timestamp: new Date(),
-            rawError: typeof result,
           });
           setHasBlockingError(true);
           return {
@@ -199,45 +197,24 @@ export default function SentiStrengthPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
-            },
-          };
-        }
-        if (!result.items || !Array.isArray(result.items)) {
-          addError({
-            type: "data",
-            message: "Format data tidak sesuai: field 'items' tidak ditemukan",
-            endpoint,
-            timestamp: new Date(),
-            rawError: JSON.stringify(Object.keys(result)),
-          });
-          setHasBlockingError(true);
-          return {
-            items: [],
-            pagination: {
-              page: 1,
-              page_size: pageSize,
-              total: 0,
-              total_pages: 0,
+              has_more: false,
             },
           };
         }
 
-        // Clear errors on success (first page only)
-        if (page === 1) {
-          clearErrors();
-        }
+        if (page === 1) clearErrors();
         retryCountRef.current = 0;
         return { items: result.items, pagination: result.pagination };
       } catch (err: unknown) {
         clearTimeout(timeoutId);
+        console.error("[SentiStrength FetchData] Error:", err);
+
         if (err instanceof DOMException && err.name === "AbortError") {
           addError({
             type: "timeout",
-            message:
-              "Request timeout (15 detik) - Server tidak merespons tepat waktu",
+            message: "Request timeout (15 detik)",
             endpoint,
             timestamp: new Date(),
-            rawError: err.message,
           });
         } else if (
           err instanceof TypeError &&
@@ -245,11 +222,10 @@ export default function SentiStrengthPage() {
         ) {
           addError({
             type: "network",
-            message:
-              "Gagal terhubung ke server - Server mungkin tidak berjalan atau CORS bermasalah",
+            message: "Gagal terhubung ke server",
             endpoint,
             timestamp: new Date(),
-            rawError: `${err.message}. Pastikan server berjalan di http://localhost:8000`,
+            rawError: err.message,
           });
         } else {
           addError({
@@ -258,7 +234,6 @@ export default function SentiStrengthPage() {
               err instanceof Error ? err.message : "Kesalahan tidak diketahui",
             endpoint,
             timestamp: new Date(),
-            rawError: err instanceof Error ? err.stack : String(err),
           });
         }
         setHasBlockingError(true);
@@ -269,6 +244,7 @@ export default function SentiStrengthPage() {
             page_size: pageSize,
             total: 0,
             total_pages: 0,
+            has_more: false,
           },
         };
       }
@@ -285,75 +261,62 @@ export default function SentiStrengthPage() {
     pagination,
     loadMore,
     reset,
+    forceReload, // ✅ Ambil forceReload
   } = useLoadMore<SentiStrengthItem>(fetchSentiStrengthData);
 
   const fetchStats = useCallback(async () => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-    const endpoint = "http://localhost:8000/api/data/sentistrength/stats";
-
+    console.log("[SentiStrength] Fetching stats...");
     try {
-      const res = await fetch(endpoint, {
-        signal: controller.signal,
-        headers: { Accept: "application/json" },
-      });
-      clearTimeout(timeoutId);
+      const res = await fetch(
+        "http://localhost:8000/api/data/sentistrength/stats",
+      );
       if (!res.ok) {
+        console.log(`[SentiStrength] Stats response status: ${res.status}`);
         setStatsError(true);
         return;
       }
       const result = await res.json();
+      console.log("[SentiStrength] Stats received:", result.data);
       if (result.status === "success" && result.data) {
         setStats(result.data);
         setStatsError(false);
       } else {
         setStatsError(true);
       }
-    } catch {
-      clearTimeout(timeoutId);
+    } catch (error) {
+      console.error("[SentiStrength] Stats fetch error:", error);
       setStatsError(true);
     }
   }, []);
 
-  const pollSentiStrengthStatus = useCallback(async (): Promise<boolean> => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch("http://localhost:8000/api/pipeline/status", {
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const result = await res.json();
-        if (result.status === "completed" || result.sentistrength_done === true)
-          return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  // Initial load
+  // ✅ Initial load dengan needInitialLoad state
   useEffect(() => {
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
-    const init = async () => {
-      try {
-        await loadMore();
-      } catch {}
-      if (mountedRef.current) fetchStats();
-    };
-    init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (needInitialLoad) {
+      console.log("[SentiStrengthPage] Triggering initial load via useEffect");
+      const init = async () => {
+        try {
+          await loadMore();
+          console.log("[SentiStrengthPage] Initial data load completed");
+          if (mountedRef.current) {
+            fetchStats();
+            console.log("[SentiStrengthPage] Stats fetch completed");
+          }
+        } catch (error) {
+          console.error("[SentiStrengthPage] Initial load failed:", error);
+        } finally {
+          setNeedInitialLoad(false);
+        }
+      };
+      init();
+    }
+  }, [needInitialLoad, loadMore, fetchStats]);
 
+  // ✅ RUN SENTISTRENGTH — dengan forceReload
   const runSentistrength = async () => {
     setIsRunning(true);
     clearErrors();
     const endpoint = "http://localhost:8000/api/pipeline/sentistrength";
-    const toastId = toast.loading("Menjalankan SentiStrength...", {
-      description: "Proses ini mungkin memakan waktu beberapa saat",
-    });
+    const toastId = toast.loading("Menjalankan SentiStrength...");
 
     try {
       const controller = new AbortController();
@@ -364,6 +327,8 @@ export default function SentiStrengthPage() {
         headers: { "Content-Type": "application/json" },
       });
       clearTimeout(timeoutId);
+
+      console.log(`[SentiStrength Pipeline] Response status: ${res.status}`);
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -385,8 +350,6 @@ export default function SentiStrengthPage() {
         });
         if (statusCode === 404)
           toast.error("Endpoint tidak ditemukan", { id: toastId });
-        else if (statusCode === 409)
-          toast.warning("SentiStrength sudah berjalan", { id: toastId });
         else if (statusCode === 422)
           toast.error("Data preprocessing belum tersedia", {
             id: toastId,
@@ -402,81 +365,53 @@ export default function SentiStrengthPage() {
       }
 
       const result = await res.json();
+      console.log("[SentiStrength Pipeline] Result:", result);
+
       if (result.status === "success") {
         toast.success("SentiStrength berhasil!", {
           id: toastId,
           description: result.message || "Data telah dilabeli",
         });
-        reset();
-        pollAttemptRef.current = 0;
-        setStatsError(false);
-        const pollForData = async () => {
-          if (!mountedRef.current) return;
-          pollAttemptRef.current++;
-          if (pollAttemptRef.current > MAX_POLL_ATTEMPTS) {
-            toast.info("Masih memproses data...", {
-              description: "Data mungkin belum sepenuhnya tersedia",
-            });
+
+        console.log(
+          "[SentiStrength Pipeline] Success! Triggering force reload...",
+        );
+
+        // ✅ Set isRunning false dulu
+        setIsRunning(false);
+
+        // ✅ Force reload data dan stats
+        setTimeout(async () => {
+          if (mountedRef.current) {
             try {
-              await loadMore();
+              console.log("[SentiStrength Pipeline] Calling forceReload...");
+              await forceReload();
+              console.log(
+                "[SentiStrength Pipeline] Force reload completed, fetching stats...",
+              );
               fetchStats();
-            } catch {}
-            setIsRunning(false);
-            return;
-          }
-          const isReady = await pollSentiStrengthStatus();
-          if (isReady) {
-            try {
-              await loadMore();
-              fetchStats();
-              setIsRunning(false);
-            } catch {
-              if (mountedRef.current)
-                toast.error("Gagal memuat data setelah SentiStrength");
-              setIsRunning(false);
+              console.log("[SentiStrength Pipeline] Stats fetched!");
+            } catch (error) {
+              console.error(
+                "[SentiStrength Pipeline] Force reload failed:",
+                error,
+              );
+              toast.error("Gagal memuat ulang data");
             }
-          } else {
-            pollTimeoutRef.current = setTimeout(pollForData, POLL_INTERVAL);
           }
-        };
-        pollTimeoutRef.current = setTimeout(pollForData, 1500);
-      } else if (result.status === "running") {
-        toast.info("SentiStrength sedang berjalan", { id: toastId });
-        pollAttemptRef.current = 0;
-        const pollRunning = async () => {
-          if (!mountedRef.current) return;
-          pollAttemptRef.current++;
-          if (pollAttemptRef.current > MAX_POLL_ATTEMPTS) {
-            toast.warning("Mungkin masih berjalan");
-            setIsRunning(false);
-            return;
-          }
-          const isReady = await pollSentiStrengthStatus();
-          if (isReady) {
-            toast.success("SentiStrength selesai!");
-            reset();
-            try {
-              await loadMore();
-              fetchStats();
-            } catch {}
-            setIsRunning(false);
-          } else {
-            pollTimeoutRef.current = setTimeout(pollRunning, POLL_INTERVAL);
-          }
-        };
-        pollTimeoutRef.current = setTimeout(pollRunning, POLL_INTERVAL);
+        }, 500);
       } else {
         addError({
           type: "data",
-          message: `Status tidak dikenal: ${result.status}`,
+          message: `Status: ${result.status}`,
           endpoint,
           timestamp: new Date(),
-          rawError: JSON.stringify(result),
         });
         toast.error("SentiStrength gagal!", { id: toastId });
         setIsRunning(false);
       }
     } catch (err: unknown) {
+      console.error("[SentiStrength Pipeline] Error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -491,17 +426,15 @@ export default function SentiStrengthPage() {
       ) {
         addError({
           type: "network",
-          message: "Gagal terhubung ke server saat menjalankan pipeline",
+          message: "Gagal terhubung ke server",
           endpoint,
           timestamp: new Date(),
-          rawError: err.message,
         });
         toast.error("Gagal terhubung ke server", { id: toastId });
       } else {
         addError({
           type: "unknown",
-          message:
-            err instanceof Error ? err.message : "Kesalahan tidak diketahui",
+          message: err instanceof Error ? err.message : "Kesalahan",
           endpoint,
           timestamp: new Date(),
         });
@@ -520,99 +453,38 @@ export default function SentiStrengthPage() {
     retryCountRef.current++;
     clearErrors();
     try {
-      reset();
-      await loadMore();
+      console.log("[SentiStrength Retry] Force reloading...");
+      await forceReload(); // ✅ Gunakan forceReload
       if (mountedRef.current) fetchStats();
-    } catch {
+      console.log("[SentiStrength Retry] Completed");
+    } catch (error) {
+      console.error("[SentiStrength Retry] Error:", error);
     } finally {
       if (mountedRef.current) setIsRetrying(false);
     }
   };
 
-  const handleOpenDetail = (item: SentiStrengthItem) => {
+  const handleOpenDetail = async (item: SentiStrengthItem) => {
     setSelectedItem(item);
     setWordData(null);
-    fetchWordDetails(item.guid);
-  };
-
-  const fetchWordDetails = async (guid: string) => {
     setIsLoadingDetail(true);
-    setWordData(null);
-    const endpoint = `http://localhost:8000/api/data/sentistrength/${guid}/words`;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(endpoint, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (!res.ok) {
-        if (res.status === 404) toast.info("Detail kata tidak tersedia");
-        else {
-          toast.error(`Gagal mengambil detail kata (HTTP ${res.status})`);
-          addError({
-            type: "server",
-            message: `Gagal detail kata (${res.status})`,
-            statusCode: res.status,
-            endpoint,
-            timestamp: new Date(),
-          });
-        }
-        return;
+      const res = await fetch(
+        `http://localhost:8000/api/data/sentistrength/${item.guid}/words`,
+      );
+      if (res.ok) {
+        const result = await res.json();
+        if (result.status === "success" && mountedRef.current)
+          setWordData(result.data);
       }
-      const result = await res.json();
-      if (result.status === "success") setWordData(result.data);
-      else toast.error("Format data tidak valid");
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError")
-        toast.error("Timeout detail kata");
-      else if (err instanceof TypeError && err.message === "Failed to fetch")
-        toast.error("Gagal terhubung ke server");
-      else toast.error("Gagal mengambil detail kata");
+    } catch {
     } finally {
       if (mountedRef.current) setIsLoadingDetail(false);
     }
   };
 
-  const getLabelBadge = (label: string) => {
-    switch (label?.toLowerCase()) {
-      case "positive":
-        return (
-          <Badge className="bg-green-100 dark:bg-green-900/50 font-medium text-green-700 dark:text-green-400">
-            <ThumbsUp className="mr-1 w-3 h-3" />
-            Positif
-          </Badge>
-        );
-      case "negative":
-        return (
-          <Badge className="bg-red-100 dark:bg-red-900/50 font-medium text-red-700 dark:text-red-400">
-            <ThumbsDown className="mr-1 w-3 h-3" />
-            Negatif
-          </Badge>
-        );
-      case "neutral":
-        return (
-          <Badge className="bg-muted font-medium text-muted-foreground">
-            <Minus className="mr-1 w-3 h-3" />
-            Neutral
-          </Badge>
-        );
-      default:
-        return <Badge variant="outline">{label || "Unknown"}</Badge>;
-    }
-  };
+  // ── Error Display ──────────────────────────────────────────────────────
 
-  const getScoreColor = (score: number, type: "pos" | "neg") => {
-    if (type === "pos") {
-      if (score >= 3) return "text-emerald-600 dark:text-emerald-400 font-bold";
-      if (score >= 2) return "text-emerald-500 dark:text-emerald-300";
-      return "text-muted-foreground";
-    } else {
-      if (score <= -3) return "text-red-600 dark:text-red-400 font-bold";
-      if (score <= -2) return "text-red-500 dark:text-red-300";
-      return "text-muted-foreground";
-    }
-  };
-
-  // Error Display Component
   const ErrorDisplay = () => {
     if (errors.length === 0) return null;
     const latestError = errors[errors.length - 1];
@@ -761,7 +633,62 @@ export default function SentiStrengthPage() {
     );
   };
 
-  if (initialLoading) return <LoadingSkeleton />;
+  const getLabelBadge = (label: string) => {
+    switch (label?.toLowerCase()) {
+      case "positive":
+        return (
+          <Badge className="bg-green-100 dark:bg-green-900/50 font-medium text-green-700 dark:text-green-400">
+            <ThumbsUp className="mr-1 w-3 h-3" />
+            Positif
+          </Badge>
+        );
+      case "negative":
+        return (
+          <Badge className="bg-red-100 dark:bg-red-900/50 font-medium text-red-700 dark:text-red-400">
+            <ThumbsDown className="mr-1 w-3 h-3" />
+            Negatif
+          </Badge>
+        );
+      case "neutral":
+        return (
+          <Badge className="bg-muted font-medium text-muted-foreground">
+            <Minus className="mr-1 w-3 h-3" />
+            Neutral
+          </Badge>
+        );
+      default:
+        return <Badge variant="outline">{label || "?"}</Badge>;
+    }
+  };
+
+  const getScoreColor = (score: number, type: "pos" | "neg") => {
+    if (type === "pos") {
+      if (score >= 3) return "text-emerald-600 font-bold";
+      if (score >= 2) return "text-emerald-500";
+      return "text-muted-foreground";
+    } else {
+      if (score <= -3) return "text-red-600 font-bold";
+      if (score <= -2) return "text-red-500";
+      return "text-muted-foreground";
+    }
+  };
+
+  // Debug render state
+  console.log("[SentiStrengthPage] Render:", {
+    initialLoading,
+    loading,
+    dataLength: data.length,
+    needInitialLoad,
+    isRunning,
+    total,
+  });
+
+  if (initialLoading) {
+    console.log("[SentiStrengthPage] Rendering LoadingSkeleton");
+    return <LoadingSkeleton />;
+  }
+
+  console.log("[SentiStrengthPage] Rendering main content");
 
   const positivePct =
     stats.total > 0 ? ((stats.positive / stats.total) * 100).toFixed(1) : "0";
@@ -772,7 +699,6 @@ export default function SentiStrengthPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex sm:flex-row flex-col sm:justify-between sm:items-start gap-4">
         <div>
           <h1 className="font-bold text-foreground text-3xl">
@@ -804,110 +730,87 @@ export default function SentiStrengthPage() {
       {/* ERROR DISPLAY */}
       <ErrorDisplay />
 
-      {/* Partial error warnings */}
-      {statsError && !hasBlockingError && data.length > 0 && (
-        <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-950/30 p-3 border border-amber-200 dark:border-amber-800 rounded-lg">
-          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-          <p className="flex-1 text-amber-800 dark:text-amber-200 text-sm">
-            Gagal memuat statistik. Data tabel mungkin masih tersedia.
-          </p>
-          <Button
-            onClick={() => {
-              setStatsError(false);
-              fetchStats();
-            }}
-            variant="outline"
-            size="sm"
-            className="gap-1"
-          >
-            <RefreshCw className="w-3 h-3" />
-            Muat Ulang
-          </Button>
-        </div>
-      )}
-
       {/* Stats Cards */}
       <div className="gap-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md">
           <CardContent className="p-4">
             <div className="flex justify-between items-start">
-              <div className="space-y-0.5 min-w-0">
-                <p className="font-medium text-muted-foreground text-xs truncate uppercase tracking-wider">
+              <div className="space-y-0.5">
+                <p className="font-medium text-muted-foreground text-xs uppercase">
                   Total
                 </p>
-                <p className="font-bold tabular-nums text-foreground text-xl">
+                <p className="font-bold text-xl">
                   {stats.total.toLocaleString()}
                 </p>
-                <p className="text-muted-foreground text-xs truncate">data</p>
               </div>
-              <div className="bg-sky-500/10 ml-2 p-2 rounded-lg shrink-0">
+              <div className="bg-sky-500/10 p-2 rounded-lg">
                 <FileText className="w-4 h-4 text-sky-600" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md">
           <CardContent className="p-4">
             <div className="flex justify-between items-start">
-              <div className="space-y-0.5 min-w-0">
-                <p className="font-medium text-muted-foreground text-xs truncate uppercase tracking-wider">
+              <div className="space-y-0.5">
+                <p className="font-medium text-muted-foreground text-xs uppercase">
                   Positif
                 </p>
-                <p className="font-bold tabular-nums text-emerald-600 text-xl">
+                <p className="font-bold text-emerald-600 text-xl">
                   {stats.positive.toLocaleString()}
                 </p>
                 <p className="text-muted-foreground text-xs">{positivePct}%</p>
               </div>
-              <div className="bg-emerald-500/10 ml-2 p-2 rounded-lg shrink-0">
+              <div className="bg-emerald-500/10 p-2 rounded-lg">
                 <ThumbsUp className="w-4 h-4 text-emerald-600" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md">
           <CardContent className="p-4">
             <div className="flex justify-between items-start">
-              <div className="space-y-0.5 min-w-0">
-                <p className="font-medium text-muted-foreground text-xs truncate uppercase tracking-wider">
+              <div className="space-y-0.5">
+                <p className="font-medium text-muted-foreground text-xs uppercase">
                   Neutral
                 </p>
-                <p className="font-bold tabular-nums text-foreground text-xl">
+                <p className="font-bold text-xl">
                   {stats.neutral.toLocaleString()}
                 </p>
                 <p className="text-muted-foreground text-xs">{neutralPct}%</p>
               </div>
-              <div className="bg-muted ml-2 p-2 rounded-lg shrink-0">
-                <Minus className="w-4 h-4 text-muted-foreground" />
+              <div className="bg-muted p-2 rounded-lg">
+                <Minus className="w-4 h-4" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md">
           <CardContent className="p-4">
             <div className="flex justify-between items-start">
-              <div className="space-y-0.5 min-w-0">
-                <p className="font-medium text-muted-foreground text-xs truncate uppercase tracking-wider">
+              <div className="space-y-0.5">
+                <p className="font-medium text-muted-foreground text-xs uppercase">
                   Negatif
                 </p>
-                <p className="font-bold tabular-nums text-red-600 text-xl">
+                <p className="font-bold text-red-600 text-xl">
                   {stats.negative.toLocaleString()}
                 </p>
                 <p className="text-muted-foreground text-xs">{negativePct}%</p>
               </div>
-              <div className="bg-red-500/10 ml-2 p-2 rounded-lg shrink-0">
+              <div className="bg-red-500/10 p-2 rounded-lg">
                 <ThumbsDown className="w-4 h-4 text-red-600" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="hover:shadow-md transition-shadow">
+        <Card className="hover:shadow-md">
           <CardContent className="p-4">
             <div className="flex justify-between items-start">
-              <div className="space-y-0.5 min-w-0">
-                <p className="font-medium text-muted-foreground text-xs truncate uppercase tracking-wider">
+              <div className="space-y-0.5">
+                <p className="font-medium text-muted-foreground text-xs uppercase">
                   Avg Score
                 </p>
-                <p className="font-bold text-foreground text-lg">
+                <p className="font-bold text-lg">
                   <span className="text-emerald-600">
                     +{stats.avg_positive}
                   </span>
@@ -916,9 +819,8 @@ export default function SentiStrengthPage() {
                     -{Math.abs(stats.avg_negative)}
                   </span>
                 </p>
-                <p className="text-muted-foreground text-xs">rata-rata</p>
               </div>
-              <div className="bg-violet-500/10 ml-2 p-2 rounded-lg shrink-0">
+              <div className="bg-violet-500/10 p-2 rounded-lg">
                 <TrendingUp className="w-4 h-4 text-violet-600" />
               </div>
             </div>
@@ -926,42 +828,23 @@ export default function SentiStrengthPage() {
         </Card>
       </div>
 
-      {/* Table atau Empty State */}
+      {/* Table */}
       {data.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-4 py-16">
-            <div className="bg-sky-100 dark:bg-sky-900/20 p-4 rounded-full">
-              <Scale className="w-12 h-12 text-sky-400" />
-            </div>
-            <div className="space-y-2 text-center">
-              <h3 className="font-semibold text-lg">Belum Ada Data</h3>
-              <p className="max-w-md text-muted-foreground">
-                Belum ada data SentiStrength yang tersedia. Klik tombol di bawah
-                untuk memulai proses pelabelan sentimen.
-              </p>
-            </div>
+            <Scale className="w-12 h-12 text-sky-400" />
+            <h3 className="font-semibold text-lg">Belum Ada Data</h3>
+            <p className="max-w-md text-muted-foreground text-center">
+              Belum ada data SentiStrength. Klik tombol untuk memulai.
+            </p>
             <Button
               onClick={runSentistrength}
               disabled={isRunning}
-              className="gap-2 bg-sky-600 hover:bg-sky-700"
+              className="bg-sky-600"
             >
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Memproses...
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4" />
-                  Jalankan SentiStrength
-                </>
-              )}
+              <Play className="mr-2 w-4 h-4" />
+              Jalankan SentiStrength
             </Button>
-            {hasBlockingError && (
-              <p className="text-red-500 text-xs">
-                Periksa error di atas untuk informasi lebih lanjut
-              </p>
-            )}
           </CardContent>
         </Card>
       ) : (
@@ -970,7 +853,7 @@ export default function SentiStrengthPage() {
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
-                  <TableRow className="hover:bg-muted/50">
+                  <TableRow>
                     <TableHead className="w-[60px] font-bold">No</TableHead>
                     <TableHead className="font-bold">Teks Bersih</TableHead>
                     <TableHead className="w-[120px] font-bold">Label</TableHead>
@@ -987,17 +870,14 @@ export default function SentiStrengthPage() {
                 </TableHeader>
                 <TableBody>
                   {data.map((item, index) => (
-                    <TableRow
-                      key={item.guid}
-                      className="hover:bg-muted/30 transition-colors"
-                    >
+                    <TableRow key={item.guid} className="hover:bg-muted/30">
                       <TableCell className="text-muted-foreground text-center">
                         {(pagination.page - 1) * pagination.page_size +
                           index +
                           1}
                       </TableCell>
                       <TableCell>
-                        <p className="max-w-[500px] text-foreground line-clamp-2">
+                        <p className="max-w-[500px] line-clamp-2">
                           {item.clean_title}
                         </p>
                       </TableCell>
@@ -1044,7 +924,7 @@ export default function SentiStrengthPage() {
         />
       )}
 
-      {/* Dialog Detail */}
+      {/* Dialog */}
       <Dialog
         open={!!selectedItem}
         onOpenChange={(open) => {
@@ -1054,9 +934,9 @@ export default function SentiStrengthPage() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+            <DialogTitle>
               Detail SentiStrength{" "}
               {selectedItem && getLabelBadge(selectedItem.label)}
             </DialogTitle>
@@ -1064,71 +944,56 @@ export default function SentiStrengthPage() {
           {selectedItem && (
             <div className="space-y-4 mt-4">
               <div className="bg-muted/50 p-4 border rounded-lg">
-                <p className="mb-2 font-medium text-muted-foreground text-xs uppercase tracking-wider">
+                <p className="mb-2 font-medium text-muted-foreground text-xs uppercase">
                   Teks Bersih
                 </p>
-                <p className="text-foreground">{selectedItem.clean_title}</p>
+                <p className="text-foreground text-sm">
+                  {selectedItem.clean_title}
+                </p>
               </div>
               <div className="gap-4 grid grid-cols-3">
-                <div className="bg-emerald-50 dark:bg-emerald-950/30 p-4 border border-emerald-100 dark:border-emerald-800 rounded-lg text-center">
-                  <p className="mb-1 font-medium text-emerald-600 dark:text-emerald-400 text-xs">
-                    Skor Positif
-                  </p>
-                  <p className="font-bold text-emerald-600 dark:text-emerald-400 text-2xl">
+                <div className="bg-emerald-50 p-4 border rounded-lg text-center">
+                  <p className="mb-1 text-emerald-600 text-xs">Positif</p>
+                  <p className="font-bold text-emerald-600 text-2xl">
                     +{selectedItem.pos}
                   </p>
                 </div>
-                <div className="bg-muted/50 p-4 border rounded-lg text-center">
-                  <p className="mb-1 font-medium text-muted-foreground text-xs">
-                    Label
-                  </p>
-                  <div className="mt-1">
-                    {getLabelBadge(selectedItem.label)}
-                  </div>
+                <div className="flex flex-col justify-center items-center bg-muted/50 p-4 border rounded-lg text-center">
+                  <p className="mb-1 text-muted-foreground text-xs">Label</p>
+                  {getLabelBadge(selectedItem.label)}
                 </div>
-                <div className="bg-red-50 dark:bg-red-950/30 p-4 border border-red-100 dark:border-red-800 rounded-lg text-center">
-                  <p className="mb-1 font-medium text-red-600 dark:text-red-400 text-xs">
-                    Skor Negatif
-                  </p>
-                  <p className="font-bold text-red-600 dark:text-red-400 text-2xl">
+                <div className="bg-red-50 p-4 border rounded-lg text-center">
+                  <p className="mb-1 text-red-600 text-xs">Negatif</p>
+                  <p className="font-bold text-red-600 text-2xl">
                     {selectedItem.neg}
                   </p>
                 </div>
               </div>
+
               {isLoadingDetail ? (
                 <div className="flex justify-center items-center py-8">
-                  <Loader2 className="w-6 h-6 text-muted-foreground animate-spin" />
+                  <Loader2 className="w-6 h-6 animate-spin" />
                   <span className="ml-2 text-muted-foreground text-sm">
                     Memuat detail kata...
                   </span>
                 </div>
-              ) : !wordData ? (
-                <div className="py-4 text-muted-foreground text-sm text-center">
-                  Gagal memuat detail kata.{" "}
-                  <button
-                    onClick={() => fetchWordDetails(selectedItem.guid)}
-                    className="text-sky-600 hover:underline"
-                  >
-                    Coba lagi
-                  </button>
-                </div>
-              ) : (
+              ) : wordData ? (
                 <>
                   {wordData.positive_words.length > 0 && (
                     <div>
-                      <p className="mb-2 font-medium text-emerald-700 dark:text-emerald-400 text-sm">
-                        Kata Positif ({wordData.positive_words.length})
+                      <p className="mb-2 font-medium text-emerald-700 text-sm">
+                        🟢 Kata Positif ({wordData.positive_words.length})
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {wordData.positive_words.map((word, idx) => (
+                        {wordData.positive_words.map((w, i) => (
                           <Badge
-                            key={idx}
+                            key={i}
                             variant="outline"
-                            className="bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400"
+                            className="bg-emerald-50 border-emerald-200 text-emerald-700"
                           >
-                            {word.word}
+                            {w.word}
                             <span className="opacity-75 ml-1.5 font-mono text-xs">
-                              +{word.score}
+                              +{w.score}
                             </span>
                           </Badge>
                         ))}
@@ -1137,19 +1002,19 @@ export default function SentiStrengthPage() {
                   )}
                   {wordData.negative_words.length > 0 && (
                     <div>
-                      <p className="mb-2 font-medium text-red-700 dark:text-red-400 text-sm">
-                        Kata Negatif ({wordData.negative_words.length})
+                      <p className="mb-2 font-medium text-red-700 text-sm">
+                        🔴 Kata Negatif ({wordData.negative_words.length})
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {wordData.negative_words.map((word, idx) => (
+                        {wordData.negative_words.map((w, i) => (
                           <Badge
-                            key={idx}
+                            key={i}
                             variant="outline"
-                            className="bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400"
+                            className="bg-red-50 border-red-200 text-red-700"
                           >
-                            {word.word}
+                            {w.word}
                             <span className="opacity-75 ml-1.5 font-mono text-xs">
-                              {word.score}
+                              {w.score}
                             </span>
                           </Badge>
                         ))}
@@ -1158,13 +1023,17 @@ export default function SentiStrengthPage() {
                   )}
                   {wordData.positive_words.length === 0 &&
                     wordData.negative_words.length === 0 && (
-                      <div className="py-4 text-muted-foreground text-sm text-center">
+                      <p className="py-4 text-muted-foreground text-sm text-center">
                         Tidak ada kata sentimen yang terdeteksi
-                      </div>
+                      </p>
                     )}
                 </>
+              ) : (
+                <p className="py-4 text-muted-foreground text-sm text-center">
+                  Gagal memuat detail kata.
+                </p>
               )}
-              <div className="pt-2 text-center">
+              <div className="text-center">
                 <Badge variant="secondary" className="font-mono text-xs">
                   GUID: {selectedItem.guid}
                 </Badge>
@@ -1180,11 +1049,8 @@ export default function SentiStrengthPage() {
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <Skeleton className="w-64 h-8" />
-        <Skeleton className="w-48 h-4" />
-      </div>
-      <div className="gap-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+      <Skeleton className="w-64 h-8" />
+      <div className="gap-3 grid grid-cols-5">
         {[...Array(5)].map((_, i) => (
           <Card key={i}>
             <CardContent className="p-4">
@@ -1197,7 +1063,7 @@ function LoadingSkeleton() {
         <CardContent className="p-0">
           <div className="space-y-3 p-4">
             {[...Array(8)].map((_, i) => (
-              <div key={i} className="flex items-center gap-4">
+              <div key={i} className="flex gap-4">
                 <Skeleton className="w-8 h-4" />
                 <Skeleton className="flex-1 h-10" />
                 <Skeleton className="w-20 h-6" />

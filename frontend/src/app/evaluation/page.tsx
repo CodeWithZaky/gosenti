@@ -33,7 +33,6 @@ import {
   Database,
   FileText,
   Info,
-  Layers,
   Loader2,
   RefreshCw,
   ServerCrash,
@@ -202,6 +201,9 @@ export default function EvaluationPage() {
   const MAX_RETRIES = 3;
   const mountedRef = useRef(true);
 
+  // ✅ Gunakan state untuk tracking initial load
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
+
   const addError = useCallback((error: ErrorDetail) => {
     setErrors((prev) => [...prev, error]);
   }, []);
@@ -219,6 +221,7 @@ export default function EvaluationPage() {
   }, []);
 
   const fetchData = async () => {
+    console.log("[Evaluation] Fetching data...");
     setLoading(true);
     clearErrors();
 
@@ -242,6 +245,10 @@ export default function EvaluationPage() {
 
       clearTimeout(timeoutId);
 
+      console.log(
+        `[Evaluation] CM response: ${cmRes.status}, TTest response: ${ttestRes.status}`,
+      );
+
       // Handle CM response
       if (!cmRes.ok) {
         const statusCode = cmRes.status;
@@ -263,6 +270,9 @@ export default function EvaluationPage() {
         });
       } else {
         const cmData = await cmRes.json();
+        console.log(
+          `[Evaluation] CM data received: ${cmData.data?.class_names?.length || 0} classes`,
+        );
         if (cmData.status === "success") {
           setCmDetail(cmData.data);
         } else {
@@ -298,6 +308,9 @@ export default function EvaluationPage() {
         setPartialError(true);
       } else {
         const ttestData = await ttestRes.json();
+        console.log(
+          `[Evaluation] TTest data received: ${ttestData.data ? "yes" : "no"}`,
+        );
         if (ttestData.status === "success") {
           setTtest(ttestData.data);
         } else {
@@ -306,7 +319,9 @@ export default function EvaluationPage() {
       }
 
       retryCountRef.current = 0;
+      console.log("[Evaluation] Data fetch completed");
     } catch (err: unknown) {
+      console.error("[Evaluation] Fetch error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -339,20 +354,34 @@ export default function EvaluationPage() {
     } finally {
       if (mountedRef.current) {
         setLoading(false);
+        console.log("[Evaluation] Loading set to false");
       }
     }
   };
 
+  // ✅ Initial load dengan needInitialLoad state
   useEffect(() => {
-    fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (needInitialLoad) {
+      console.log("[EvaluationPage] Triggering initial load via useEffect");
+      const init = async () => {
+        await fetchData();
+        setNeedInitialLoad(false);
+        console.log("[EvaluationPage] Initial load completed");
+      };
+      init();
+    }
+  }, [needInitialLoad]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRetry = async () => {
     if (retryCountRef.current >= MAX_RETRIES) return;
     setIsRetrying(true);
     retryCountRef.current++;
+    console.log("[Evaluation Retry] Reloading data...");
     await fetchData();
-    if (mountedRef.current) setIsRetrying(false);
+    if (mountedRef.current) {
+      setIsRetrying(false);
+      console.log("[Evaluation Retry] Completed");
+    }
   };
 
   // Komponen Error Display
@@ -509,15 +538,28 @@ export default function EvaluationPage() {
     );
   };
 
+  // Debug render state
+  console.log("[EvaluationPage] Render:", {
+    loading,
+    hasData: !!cmDetail,
+    hasTTest: !!ttest,
+    needInitialLoad,
+    errorsCount: errors.length,
+  });
+
   // ============================================================
   // RENDER: LOADING STATE
   // ============================================================
-  if (loading) return <LoadingSkeleton />;
+  if (loading) {
+    console.log("[EvaluationPage] Rendering LoadingSkeleton");
+    return <LoadingSkeleton />;
+  }
 
   // ============================================================
   // RENDER: FULL ERROR STATE
   // ============================================================
   if (!cmDetail && errors.length > 0) {
+    console.log("[EvaluationPage] Rendering full error state");
     return (
       <div className="space-y-6">
         <div>
@@ -562,6 +604,7 @@ export default function EvaluationPage() {
   // RENDER: EMPTY STATE
   // ============================================================
   if (!cmDetail) {
+    console.log("[EvaluationPage] Rendering empty state");
     return (
       <div className="space-y-6">
         <div>
@@ -582,7 +625,7 @@ export default function EvaluationPage() {
                 evaluasi.
               </p>
             </div>
-            <Button onClick={fetchData} variant="outline" className="gap-2">
+            <Button onClick={handleRetry} variant="outline" className="gap-2">
               <RefreshCw className="w-4 h-4" />
               Refresh
             </Button>
@@ -591,6 +634,8 @@ export default function EvaluationPage() {
       </div>
     );
   }
+
+  console.log("[EvaluationPage] Rendering main content");
 
   const classLabels = cmDetail.class_names;
   const totalSamples = cmDetail.proposed.overall.matrix
@@ -786,7 +831,7 @@ export default function EvaluationPage() {
             (TF-IDF + InSet Lexicon)
           </p>
         </div>
-        <Button variant="ghost" onClick={fetchData} disabled={isRetrying}>
+        <Button variant="ghost" onClick={handleRetry} disabled={isRetrying}>
           {isRetrying ? (
             <Loader2 className="mr-2 w-4 h-4 animate-spin" />
           ) : (
@@ -1593,7 +1638,7 @@ export default function EvaluationPage() {
           </div>
         </TabsContent>
 
-        {/* CV FOLDS & TTEST tabs - ringkasan saja untuk brevity */}
+        {/* CV FOLDS TAB */}
         <TabsContent value="folds">
           <div className="space-y-6">
             {(["baseline", "proposed"] as const).map((variant) => {
@@ -1692,6 +1737,7 @@ export default function EvaluationPage() {
           </div>
         </TabsContent>
 
+        {/* TTEST TAB */}
         <TabsContent value="ttest">
           {ttest ? (
             <div className="gap-6 grid grid-cols-1 lg:grid-cols-2">
@@ -1794,17 +1840,17 @@ export default function EvaluationPage() {
       </Tabs>
 
       {/* Info Cards */}
-      <div className="gap-3 grid grid-cols-2 md:grid-cols-4">
+      <div className="gap-3 grid grid-cols-2 md:grid-cols-3">
         <InfoCard
           icon={<Database className="w-4 h-4" />}
           label="Total Samples"
           value={totalSamples.toLocaleString()}
         />
-        <InfoCard
+        {/* <InfoCard
           icon={<Layers className="w-4 h-4 text-violet-600" />}
           label="Features"
           value="2,540"
-        />
+        /> */}
         <InfoCard
           icon={<Cpu className="w-4 h-4 text-sky-600" />}
           label="CV Folds"

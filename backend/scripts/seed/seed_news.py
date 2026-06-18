@@ -157,6 +157,11 @@ def seed_raw_news(csv_path):
         if nat_count > 0:
             print(f"\n🔧 Total {nat_count} data datetime berhasil diperbaiki otomatis")
 
+        # 🔥 URUTKAN data dari scraped_at paling dulu (ascending)
+        print("\n🔍 Mengurutkan data dari scraped_at paling awal...")
+        df = df.sort_values(by='scraped_at', ascending=True)
+        print(f"✅ Pengurutan selesai")
+        
         print(f"\nTotal data CSV: {len(df)}")
 
     except FileNotFoundError:

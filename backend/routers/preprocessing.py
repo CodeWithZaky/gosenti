@@ -23,9 +23,12 @@ def get_preprocessing_data(
     result = paginate_query(query, page, page_size)
     items = [
         {
-            "guid": prep.news_guid,
-            "original_title": news.title,
-            "clean_title": prep.clean_title,
+        "guid": prep.news_guid,
+        "original_title": news.title,
+        "case_folding": prep.case_folding,
+        "clean_title": prep.clean_title,
+        "stopword_removal": prep.stopword_removal,
+        "stemming": prep.stemming,
         }
         for prep, news in result["items"]
     ]

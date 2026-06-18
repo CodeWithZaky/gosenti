@@ -69,7 +69,9 @@ export default function ModelingPage() {
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
   const mountedRef = useRef(true);
-  const initialLoadDoneRef = useRef(false);
+
+  // ✅ Ganti ref dengan state
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
 
   // Helper untuk menambah error
   const addError = useCallback((error: ErrorDetail) => {
@@ -92,6 +94,7 @@ export default function ModelingPage() {
   }, []);
 
   const fetchHistory = async () => {
+    console.log("[Modeling] Fetching history...");
     const endpoint = "http://localhost:8000/api/modeling/history";
 
     try {
@@ -104,6 +107,8 @@ export default function ModelingPage() {
       });
 
       clearTimeout(timeoutId);
+
+      console.log(`[Modeling] History response status: ${res.status}`);
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -129,6 +134,10 @@ export default function ModelingPage() {
       }
 
       const result = await res.json();
+      console.log(
+        `[Modeling] History received: ${result.data?.length || 0} experiments`,
+      );
+
       if (result.status === "success") {
         setExperiments(result.data || []);
         setHistoryError(false);
@@ -143,6 +152,7 @@ export default function ModelingPage() {
         setHistoryError(true);
       }
     } catch (err: unknown) {
+      console.error("[Modeling] History fetch error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -175,6 +185,7 @@ export default function ModelingPage() {
   };
 
   const fetchAlphaInfo = async () => {
+    console.log("[Modeling] Fetching alpha info...");
     const gridSearchEndpoint = "http://localhost:8000/api/modeling/grid-search";
     const paramsEndpoint =
       "http://localhost:8000/api/evaluation/confusion-matrix";
@@ -191,6 +202,7 @@ export default function ModelingPage() {
       clearTimeout(timeoutId);
 
       if (!res.ok) {
+        console.log("[Modeling] Grid search not available");
         setHasGridSearch(false);
         return;
       }
@@ -198,6 +210,7 @@ export default function ModelingPage() {
       const result = await res.json();
       if (result.status === "success") {
         setHasGridSearch(true);
+        console.log("[Modeling] Grid search available, fetching params...");
 
         // Ambil alpha dari best_params
         try {
@@ -221,6 +234,10 @@ export default function ModelingPage() {
                 baseline: paramsData.data.config.alpha_baseline || 1.0,
                 proposed: paramsData.data.config.alpha_proposed || 1.0,
               });
+              console.log(
+                "[Modeling] Alpha info received:",
+                paramsData.data.config,
+              );
             }
           } else {
             setAlphaError(true);
@@ -239,25 +256,27 @@ export default function ModelingPage() {
     }
   };
 
-  // Initial load
+  // ✅ Initial load dengan needInitialLoad state
   useEffect(() => {
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
+    if (needInitialLoad) {
+      console.log("[ModelingPage] Triggering initial load via useEffect");
+      const init = async () => {
+        setLoading(true);
+        clearErrors();
 
-    const init = async () => {
-      setLoading(true);
-      clearErrors();
+        await fetchHistory();
+        await fetchAlphaInfo();
 
-      await fetchHistory();
-      await fetchAlphaInfo();
+        if (mountedRef.current) {
+          setLoading(false);
+          setNeedInitialLoad(false);
+        }
+        console.log("[ModelingPage] Initial load completed");
+      };
 
-      if (mountedRef.current) {
-        setLoading(false);
-      }
-    };
-
-    init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      init();
+    }
+  }, [needInitialLoad]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRunModeling = async () => {
     setIsProcessing(true);
@@ -279,6 +298,8 @@ export default function ModelingPage() {
       });
 
       clearTimeout(timeoutId);
+
+      console.log(`[Modeling Pipeline] Response status: ${res.status}`);
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -328,21 +349,35 @@ export default function ModelingPage() {
       }
 
       const result = await res.json();
+      console.log("[Modeling Pipeline] Result:", result);
 
       if (result.status === "success") {
         toast.success("Training berhasil!", {
           id: toastId,
           description: "Model CNB telah dilatih dengan 10-Fold CV",
         });
+
+        console.log("[Modeling Pipeline] Success! Reloading data...");
+
         clearErrors();
         retryCountRef.current = 0;
 
-        // Delay sebentar lalu fetch ulang
+        // ✅ Set isProcessing false dulu
+        setIsProcessing(false);
+
+        // ✅ Set loading true untuk menunjukkan loading indicator
+        setLoading(true);
+
+        // ✅ Delay sebentar lalu fetch ulang
         setTimeout(async () => {
           if (mountedRef.current) {
+            console.log(
+              "[Modeling Pipeline] Fetching new history and alpha info...",
+            );
             await fetchHistory();
             await fetchAlphaInfo();
-            setIsProcessing(false);
+            setLoading(false);
+            console.log("[Modeling Pipeline] Reload completed!");
           }
         }, 2000);
       } else {
@@ -360,6 +395,7 @@ export default function ModelingPage() {
         setIsProcessing(false);
       }
     } catch (err: unknown) {
+      console.error("[Modeling Pipeline] Error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -420,9 +456,12 @@ export default function ModelingPage() {
     clearErrors();
     setLoading(true);
 
+    console.log("[Modeling Retry] Reloading data...");
+
     try {
       await fetchHistory();
       await fetchAlphaInfo();
+      console.log("[Modeling Retry] Completed");
     } catch {
       // Error sudah di-handle
     } finally {
@@ -587,10 +626,24 @@ export default function ModelingPage() {
     );
   };
 
+  // Debug render state
+  console.log("[ModelingPage] Render:", {
+    loading,
+    isProcessing,
+    needInitialLoad,
+    experimentsCount: experiments.length,
+    hasGridSearch,
+  });
+
   // ============================================================
   // RENDER: LOADING STATE
   // ============================================================
-  if (loading) return <LoadingSkeleton />;
+  if (loading) {
+    console.log("[ModelingPage] Rendering LoadingSkeleton");
+    return <LoadingSkeleton />;
+  }
+
+  console.log("[ModelingPage] Rendering main content");
 
   const latestExp = experiments[0];
 
