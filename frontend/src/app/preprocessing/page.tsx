@@ -42,10 +42,14 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+// ✅ Update interface dengan kolom baru
 interface PreprocessItem {
   guid: string;
   original_title: string;
+  case_folding: string;
   clean_title: string;
+  stopword_removal: string;
+  stemming: string;
 }
 
 interface ErrorDetail {
@@ -70,7 +74,9 @@ export default function PreprocessPage() {
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
   const mountedRef = useRef(true);
-  const initialLoadDoneRef = useRef(false);
+
+  // ✅ Gunakan state untuk tracking initial load
+  const [needInitialLoad, setNeedInitialLoad] = useState(true);
 
   const addError = useCallback((error: ErrorDetail) => {
     setErrors((prev) => [...prev, error]);
@@ -95,12 +101,16 @@ export default function PreprocessPage() {
       const timeoutId = setTimeout(() => controller.abort(), 15000);
       const endpoint = `http://localhost:8000/api/data/preprocessing?page=${page}&page_size=${pageSize}`;
 
+      console.log(`[FetchData] Requesting: ${endpoint}`);
+
       try {
         const res = await fetch(endpoint, {
           signal: controller.signal,
           headers: { Accept: "application/json" },
         });
         clearTimeout(timeoutId);
+
+        console.log(`[FetchData] Response status: ${res.status}`);
 
         if (!res.ok) {
           const statusCode = res.status;
@@ -130,11 +140,14 @@ export default function PreprocessPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
 
         const result = await res.json();
+        console.log(`[FetchData] Data received: ${result.items?.length} items`);
+
         if (!result || typeof result !== "object") {
           addError({
             type: "data",
@@ -151,6 +164,7 @@ export default function PreprocessPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
@@ -170,6 +184,7 @@ export default function PreprocessPage() {
               page_size: pageSize,
               total: 0,
               total_pages: 0,
+              has_more: false,
             },
           };
         }
@@ -179,6 +194,8 @@ export default function PreprocessPage() {
         return { items: result.items, pagination: result.pagination };
       } catch (err: unknown) {
         clearTimeout(timeoutId);
+        console.error("[FetchData] Error:", err);
+
         if (err instanceof DOMException && err.name === "AbortError") {
           addError({
             type: "timeout",
@@ -218,6 +235,7 @@ export default function PreprocessPage() {
             page_size: pageSize,
             total: 0,
             total_pages: 0,
+            has_more: false,
           },
         };
       }
@@ -233,22 +251,28 @@ export default function PreprocessPage() {
     total,
     pagination,
     loadMore,
-    reset,
+    forceReload,
   } = useLoadMore<PreprocessItem>(fetchPreprocessData);
 
-  // Initial load
+  // ✅ Initial load pakai needInitialLoad state
   useEffect(() => {
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
-    const init = async () => {
-      try {
-        await loadMore();
-      } catch {}
-    };
-    init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (needInitialLoad) {
+      console.log("[PreprocessPage] Triggering initial load via useEffect");
+      const doLoad = async () => {
+        try {
+          await loadMore();
+          console.log("[PreprocessPage] Initial load completed");
+        } catch (error) {
+          console.error("[PreprocessPage] Initial load failed:", error);
+        } finally {
+          setNeedInitialLoad(false);
+        }
+      };
+      doLoad();
+    }
+  }, [needInitialLoad, loadMore]);
 
-  // ✅ RUN PREPROCESSING — tanpa polling
+  // ✅ RUN PREPROCESSING — dengan forceReload
   const runPreprocessing = async () => {
     setIsRunning(true);
     clearErrors();
@@ -266,6 +290,8 @@ export default function PreprocessPage() {
         headers: { "Content-Type": "application/json" },
       });
       clearTimeout(timeoutId);
+
+      console.log(`[Preprocessing] Response status: ${res.status}`);
 
       if (!res.ok) {
         const statusCode = res.status;
@@ -299,18 +325,30 @@ export default function PreprocessPage() {
       }
 
       const result = await res.json();
+      console.log("[Preprocessing] Result:", result);
+
       if (result.status === "success") {
         toast.success("Preprocessing berhasil!", {
           id: toastId,
           description: result.message || "Data telah diproses",
         });
-        reset();
+
+        console.log("[Preprocessing] Success! Triggering force reload...");
+
+        setIsRunning(false);
+
         setTimeout(async () => {
-          try {
-            await loadMore();
-          } catch {}
-          if (mountedRef.current) setIsRunning(false);
-        }, 1000);
+          if (mountedRef.current) {
+            try {
+              console.log("[Preprocessing] Calling forceReload...");
+              await forceReload();
+              console.log("[Preprocessing] Force reload completed!");
+            } catch (error) {
+              console.error("[Preprocessing] Force reload failed:", error);
+              toast.error("Gagal memuat ulang data");
+            }
+          }
+        }, 500);
       } else {
         addError({
           type: "data",
@@ -323,6 +361,7 @@ export default function PreprocessPage() {
         setIsRunning(false);
       }
     } catch (err: unknown) {
+      console.error("[Preprocessing] Error:", err);
       if (err instanceof DOMException && err.name === "AbortError") {
         addError({
           type: "timeout",
@@ -366,9 +405,10 @@ export default function PreprocessPage() {
     retryCountRef.current++;
     clearErrors();
     try {
-      reset();
-      await loadMore();
-    } catch {
+      console.log("[Retry] Force reloading...");
+      await forceReload();
+    } catch (error) {
+      console.error("[Retry] Error:", error);
     } finally {
       if (mountedRef.current) setIsRetrying(false);
     }
@@ -546,10 +586,25 @@ export default function PreprocessPage() {
     );
   };
 
+  // Debug render state
+  console.log("[PreprocessPage] Render:", {
+    initialLoading,
+    loading,
+    dataLength: data.length,
+    needInitialLoad,
+    isRunning,
+    total,
+  });
+
   // ============================================================
   // RENDER: LOADING STATE
   // ============================================================
-  if (initialLoading) return <LoadingSkeleton />;
+  if (initialLoading) {
+    console.log("[PreprocessPage] Rendering LoadingSkeleton");
+    return <LoadingSkeleton />;
+  }
+
+  console.log("[PreprocessPage] Rendering main content");
 
   return (
     <div className="space-y-6">
@@ -720,7 +775,7 @@ export default function PreprocessPage() {
                 <TableHeader>
                   <TableRow className="hover:bg-muted/50">
                     <TableHead className="w-[60px] font-bold">No</TableHead>
-                    <TableHead className="w-[45%] font-bold">
+                    <TableHead className="font-bold">
                       <Badge
                         variant="outline"
                         className="border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-xs"
@@ -728,10 +783,33 @@ export default function PreprocessPage() {
                         Original
                       </Badge>
                     </TableHead>
-                    <TableHead className="w-[30px]"></TableHead>
-                    <TableHead className="w-[45%] font-bold">
+                    <TableHead className="font-bold">
+                      <Badge
+                        variant="outline"
+                        className="border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 text-xs"
+                      >
+                        Case Folding
+                      </Badge>
+                    </TableHead>
+                    <TableHead className="font-bold">
                       <Badge className="bg-green-100 hover:bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400 text-xs">
                         Cleaned
+                      </Badge>
+                    </TableHead>
+                    <TableHead className="font-bold">
+                      <Badge
+                        variant="outline"
+                        className="border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400 text-xs"
+                      >
+                        Stopword
+                      </Badge>
+                    </TableHead>
+                    <TableHead className="font-bold">
+                      <Badge
+                        variant="outline"
+                        className="border-purple-200 dark:border-purple-800 text-purple-600 dark:text-purple-400 text-xs"
+                      >
+                        Stemming
                       </Badge>
                     </TableHead>
                     <TableHead className="w-[80px] font-bold text-center">
@@ -751,26 +829,28 @@ export default function PreprocessPage() {
                           1}
                       </TableCell>
                       <TableCell>
-                        <p className="max-w-[400px] text-muted-foreground line-clamp-2">
+                        <p className="max-w-[300px] text-muted-foreground text-sm line-clamp-2">
                           {item.original_title}
                         </p>
-                        <p className="mt-1 text-muted-foreground/60 text-xs">
-                          {item.original_title.length} char
+                      </TableCell>
+                      <TableCell>
+                        <p className="max-w-[300px] text-blue-600 dark:text-blue-400 text-sm line-clamp-2">
+                          {item.case_folding || "-"}
                         </p>
                       </TableCell>
                       <TableCell>
-                        <div className="flex justify-center">
-                          <ArrowRight className="w-4 h-4 text-muted-foreground/40" />
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <p className="max-w-[400px] font-medium text-foreground line-clamp-2">
+                        <p className="max-w-[300px] font-medium text-foreground text-sm line-clamp-2">
                           {item.clean_title}
                         </p>
-                        <p className="mt-1 text-emerald-600 dark:text-emerald-400 text-xs">
-                          {item.clean_title.length} char (-
-                          {item.original_title.length - item.clean_title.length}
-                          )
+                      </TableCell>
+                      <TableCell>
+                        <p className="max-w-[300px] text-amber-600 dark:text-amber-400 text-sm line-clamp-2">
+                          {item.stopword_removal || "-"}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <p className="max-w-[300px] text-purple-600 dark:text-purple-400 text-sm line-clamp-2">
+                          {item.stemming || "-"}
                         </p>
                       </TableCell>
                       <TableCell className="text-center">
@@ -801,13 +881,15 @@ export default function PreprocessPage() {
         />
       )}
 
+      {/* ✅ Dialog dengan semua kolom */}
       <Dialog open={!!selectedItem} onOpenChange={() => setSelectedItem(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Detail Preprocessing</DialogTitle>
           </DialogHeader>
           {selectedItem && (
             <div className="space-y-4 mt-4">
+              {/* Original */}
               <div className="bg-red-50 dark:bg-red-950/30 p-4 border border-red-100 dark:border-red-800 rounded-lg">
                 <Badge
                   variant="outline"
@@ -815,21 +897,40 @@ export default function PreprocessPage() {
                 >
                   Original
                 </Badge>
-                <p className="mt-2 text-foreground">
+                <p className="mt-2 text-foreground text-sm">
                   {selectedItem.original_title}
                 </p>
                 <p className="mt-2 text-muted-foreground text-xs">
                   {selectedItem.original_title.length} karakter
                 </p>
               </div>
+
               <div className="flex justify-center">
                 <ArrowRight className="w-6 h-6 text-purple-400" />
               </div>
+
+              {/* Case Folding */}
+              <div className="bg-blue-50 dark:bg-blue-950/30 p-4 border border-blue-100 dark:border-blue-800 rounded-lg">
+                <Badge
+                  variant="outline"
+                  className="mb-2 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400"
+                >
+                  Case Folding
+                </Badge>
+                <p className="mt-2 text-blue-600 dark:text-blue-400 text-sm">
+                  {selectedItem.case_folding || "-"}
+                </p>
+                <p className="mt-2 text-muted-foreground text-xs">
+                  {selectedItem.case_folding?.length || 0} karakter
+                </p>
+              </div>
+
+              {/* Cleaned */}
               <div className="bg-green-50 dark:bg-green-950/30 p-4 border border-green-100 dark:border-green-800 rounded-lg">
                 <Badge className="bg-green-100 dark:bg-green-900/50 mb-2 text-green-700 dark:text-green-400">
                   Cleaned
                 </Badge>
-                <p className="mt-2 font-medium text-foreground">
+                <p className="mt-2 font-medium text-foreground text-sm">
                   {selectedItem.clean_title}
                 </p>
                 <p className="mt-2 text-emerald-600 dark:text-emerald-400 text-xs">
@@ -839,6 +940,39 @@ export default function PreprocessPage() {
                   )
                 </p>
               </div>
+
+              {/* Stopword Removal */}
+              <div className="bg-amber-50 dark:bg-amber-950/30 p-4 border border-amber-100 dark:border-amber-800 rounded-lg">
+                <Badge
+                  variant="outline"
+                  className="mb-2 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400"
+                >
+                  Stopword Removal
+                </Badge>
+                <p className="mt-2 text-amber-600 dark:text-amber-400 text-sm">
+                  {selectedItem.stopword_removal || "-"}
+                </p>
+                <p className="mt-2 text-muted-foreground text-xs">
+                  {selectedItem.stopword_removal?.length || 0} karakter
+                </p>
+              </div>
+
+              {/* Stemming */}
+              <div className="bg-purple-50 dark:bg-purple-950/30 p-4 border border-purple-100 dark:border-purple-800 rounded-lg">
+                <Badge
+                  variant="outline"
+                  className="mb-2 border-purple-200 dark:border-purple-800 text-purple-600 dark:text-purple-400"
+                >
+                  Stemming
+                </Badge>
+                <p className="mt-2 text-purple-600 dark:text-purple-400 text-sm">
+                  {selectedItem.stemming || "-"}
+                </p>
+                <p className="mt-2 text-muted-foreground text-xs">
+                  {selectedItem.stemming?.length || 0} karakter
+                </p>
+              </div>
+
               <div className="text-center">
                 <Badge variant="secondary" className="text-xs">
                   GUID: {selectedItem.guid}
@@ -875,7 +1009,9 @@ function LoadingSkeleton() {
               <div key={i} className="flex items-center gap-4">
                 <Skeleton className="w-8 h-4" />
                 <Skeleton className="flex-1 h-12" />
-                <Skeleton className="w-4 h-4" />
+                <Skeleton className="flex-1 h-12" />
+                <Skeleton className="flex-1 h-12" />
+                <Skeleton className="flex-1 h-12" />
                 <Skeleton className="flex-1 h-12" />
                 <Skeleton className="w-8 h-8" />
               </div>
