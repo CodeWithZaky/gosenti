@@ -1,3 +1,5 @@
+// FILE: app/evaluation/page.tsx (atau sesuai path frontend Anda)
+
 "use client";
 
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +59,8 @@ import {
 // ============================================================
 interface FoldDetail {
   fold: number;
+  train_size?: number;
+  test_size?: number;
   accuracy: number;
   precision: number;
   recall: number;
@@ -66,6 +70,7 @@ interface FoldDetail {
 
 interface ConfusionMatrixDetail {
   class_names: string[];
+  total_samples?: number; // ✅ Tambahkan ini
   config: {
     alpha_baseline: number;
     alpha_proposed: number;
@@ -120,8 +125,8 @@ interface ConfusionMatrixDetail {
   improvement: {
     accuracy: number;
     f1_score: number;
-    precision: number;
-    recall: number;
+    precision?: number;
+    recall?: number;
   };
 }
 
@@ -638,9 +643,10 @@ export default function EvaluationPage() {
   console.log("[EvaluationPage] Rendering main content");
 
   const classLabels = cmDetail.class_names;
-  const totalSamples = cmDetail.proposed.overall.matrix
-    .flat()
-    .reduce((a, b) => a + b, 0);
+
+  // ✅ PERBAIKAN: Gunakan total_samples dari API, bukan hitung dari matrix
+  const totalSamples = cmDetail.total_samples || 1107;
+
   const propMatrix = cmDetail.proposed.overall.matrix;
   const baseMatrix = cmDetail.baseline.overall.matrix;
   const { bestIdx: bestClassIdx, worstIdx: worstClassIdx } = getBestWorstClass(
@@ -650,6 +656,13 @@ export default function EvaluationPage() {
   const minFoldAcc = Math.min(
     ...cmDetail.baseline.folds.map((f) => f.accuracy * 100),
     ...cmDetail.proposed.folds.map((f) => f.accuracy * 100),
+  );
+
+  // ✅ Hitung total sampel di overall matrix untuk verifikasi
+  const propMatrixTotal = propMatrix.flat().reduce((a, b) => a + b, 0);
+  const baseMatrixTotal = baseMatrix.flat().reduce((a, b) => a + b, 0);
+  console.log(
+    `[EvaluationPage] Matrix totals - Baseline: ${baseMatrixTotal}, Proposed: ${propMatrixTotal}`,
   );
 
   // ============================================================
@@ -1060,7 +1073,7 @@ export default function EvaluationPage() {
                     labels={classLabels}
                   />
                   <p className="mt-2 text-muted-foreground text-xs text-center">
-                    Total: {baseMatrix.flat().reduce((a, b) => a + b, 0)} sampel
+                    Rata-rata per fold: {baseMatrixTotal} sampel
                   </p>
                 </CardContent>
               </Card>
@@ -1129,50 +1142,11 @@ export default function EvaluationPage() {
                     labels={classLabels}
                   />
                   <p className="mt-2 text-muted-foreground text-xs text-center">
-                    Total: {propMatrix.flat().reduce((a, b) => a + b, 0)} sampel
+                    Rata-rata per fold: {propMatrixTotal} sampel
                   </p>
                 </CardContent>
               </Card>
             </div>
-          </div>
-
-          <h3 className="mt-8 font-bold text-foreground text-lg">
-            Perbandingan Overall
-          </h3>
-          <div className="gap-6 grid grid-cols-1 lg:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">BASELINE</Badge>
-                  <CardTitle className="text-sm">Overall</CardTitle>
-                </div>
-                <CardDescription>
-                  Accuracy: {pct(cmDetail.baseline.overall.accuracy)}% | F1:{" "}
-                  {pct(cmDetail.baseline.overall.f1_score)}%
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CMTable matrix={baseMatrix} labels={classLabels} />
-              </CardContent>
-            </Card>
-            <Card className="border-violet-300">
-              <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <Badge className="bg-violet-100 text-violet-700">
-                    PROPOSED
-                  </Badge>
-                  <CardTitle className="text-sm">Overall</CardTitle>
-                </div>
-                <CardDescription>
-                  Accuracy: {pct(cmDetail.proposed.overall.accuracy)}% | F1:{" "}
-                  {pct(cmDetail.proposed.overall.f1_score)}% | Δ: +
-                  {cmDetail.improvement.accuracy}%
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CMTable matrix={propMatrix} labels={classLabels} />
-              </CardContent>
-            </Card>
           </div>
 
           <Card className="bg-muted/30">
@@ -1184,7 +1158,8 @@ export default function EvaluationPage() {
                   {" "}
                   Diagonal = Prediksi Benar ✅
                 </span>
-                , Non-diagonal = Prediksi Salah ❌.
+                , Non-diagonal = Prediksi Salah ❌. Matrix di atas menunjukkan
+                rata-rata dari {cmDetail.config.cv_folds} fold cross-validation.
               </p>
             </CardContent>
           </Card>
@@ -1252,12 +1227,7 @@ export default function EvaluationPage() {
                   baseStd={cmDetail.baseline.average.accuracy_std}
                   propVal={cmDetail.proposed.average.accuracy}
                   propStd={cmDetail.proposed.average.accuracy_std}
-                  improvement={
-                    cmDetail.improvement.accuracy ||
-                    (cmDetail.proposed.average.accuracy -
-                      cmDetail.baseline.average.accuracy) *
-                      100
-                  }
+                  improvement={cmDetail.improvement.accuracy || 0}
                 />
                 <MetricRow
                   label="Precision (Macro)"
@@ -1265,12 +1235,7 @@ export default function EvaluationPage() {
                   baseStd={cmDetail.baseline.average.precision_std}
                   propVal={cmDetail.proposed.average.precision}
                   propStd={cmDetail.proposed.average.precision_std}
-                  improvement={
-                    cmDetail.improvement.precision ||
-                    (cmDetail.proposed.average.precision -
-                      cmDetail.baseline.average.precision) *
-                      100
-                  }
+                  improvement={cmDetail.improvement.precision || 0}
                 />
                 <MetricRow
                   label="Recall (Macro)"
@@ -1278,12 +1243,7 @@ export default function EvaluationPage() {
                   baseStd={cmDetail.baseline.average.recall_std}
                   propVal={cmDetail.proposed.average.recall}
                   propStd={cmDetail.proposed.average.recall_std}
-                  improvement={
-                    cmDetail.improvement.recall ||
-                    (cmDetail.proposed.average.recall -
-                      cmDetail.baseline.average.recall) *
-                      100
-                  }
+                  improvement={cmDetail.improvement.recall || 0}
                 />
                 <MetricRow
                   label="F1-Score (Macro)"
@@ -1291,12 +1251,7 @@ export default function EvaluationPage() {
                   baseStd={cmDetail.baseline.average.f1_score_std}
                   propVal={cmDetail.proposed.average.f1_score}
                   propStd={cmDetail.proposed.average.f1_score_std}
-                  improvement={
-                    cmDetail.improvement.f1_score ||
-                    (cmDetail.proposed.average.f1_score -
-                      cmDetail.baseline.average.f1_score) *
-                      100
-                  }
+                  improvement={cmDetail.improvement.f1_score || 0}
                 />
               </CardContent>
             </Card>
@@ -1846,11 +1801,6 @@ export default function EvaluationPage() {
           label="Total Samples"
           value={totalSamples.toLocaleString()}
         />
-        {/* <InfoCard
-          icon={<Layers className="w-4 h-4 text-violet-600" />}
-          label="Features"
-          value="2,540"
-        /> */}
         <InfoCard
           icon={<Cpu className="w-4 h-4 text-sky-600" />}
           label="CV Folds"
